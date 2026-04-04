@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import { assertDb, bonds, companies, drivers, users } from "@repo/db";
 import { buildApp } from "../apps/api/src/index";
+import { server as dashboardServer, startDashboard } from "../apps/dashboard/src/server";
 
 type CookieJar = { cookie: string };
 
@@ -11,9 +12,10 @@ type TrpcEnvelope = {
 
 const origin = "http://localhost:3000";
 
-const trpcData = (body: TrpcEnvelope) => body.result?.data && typeof body.result.data === "object" && "json" in (body.result.data as object)
-  ? (body.result.data as { json?: unknown }).json
-  : body.result?.data;
+const trpcData = (body: TrpcEnvelope) =>
+  body.result?.data && typeof body.result.data === "object" && "json" in (body.result.data as object)
+    ? (body.result.data as { json?: unknown }).json
+    : body.result?.data;
 
 const trpcErrorMessage = (body: TrpcEnvelope) => body.error?.json?.message ?? body.error?.message ?? "unknown_trpc_error";
 
@@ -55,7 +57,7 @@ const getTrpc = async (baseUrl: string, path: string, cookie: string, input?: un
       origin
     }
   });
-  const body = await response.json() as TrpcEnvelope;
+  const body = (await response.json()) as TrpcEnvelope;
   return { response, body };
 };
 
@@ -69,13 +71,26 @@ const postTrpc = async (baseUrl: string, path: string, cookie: string, input: un
     },
     body: JSON.stringify(input)
   });
-  const body = await response.json() as TrpcEnvelope;
+  const body = (await response.json()) as TrpcEnvelope;
   return { response, body };
 };
+
+const closeDashboard = async () =>
+  new Promise<void>((resolve, reject) => {
+    dashboardServer.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
 
 const main = async () => {
   const app = await buildApp();
   await app.listen({ port: 3001, host: "127.0.0.1" });
+  await startDashboard();
   const baseUrl = "http://127.0.0.1:3001";
 
   try {
@@ -202,6 +217,29 @@ const main = async () => {
     }
     phase("gate-negative", { status: gateNegative.response.status, message: trpcErrorMessage(gateNegative.body) });
 
+    const dashboardResponse = await fetch("http://127.0.0.1:3000/dashboard", {
+      headers: {
+        cookie: company.cookie,
+        origin
+      }
+    });
+    const dashboardHtml = await dashboardResponse.text();
+    if (
+      !dashboardResponse.ok ||
+      !dashboardHtml.includes("Lojistas vinculados") ||
+      !dashboardHtml.includes("Solicitações pendentes") ||
+      !dashboardHtml.includes("Entregadores vinculados") ||
+      !dashboardHtml.includes("Verifier Retailer") ||
+      !dashboardHtml.includes("Verifier Driver")
+    ) {
+      throw new Error(`dashboard_failed:${dashboardResponse.status}:${dashboardHtml}`);
+    }
+    phase("dashboard", {
+      status: dashboardResponse.status,
+      containsRetailer: dashboardHtml.includes("Verifier Retailer"),
+      containsDriver: dashboardHtml.includes("Verifier Driver")
+    });
+
     const duplicateRequest = await postTrpc(baseUrl, "bonds.requestRetailerBond", retailer.cookie, { companyId: companyProfile.profile.id });
     if (duplicateRequest.response.status !== 409 || trpcErrorMessage(duplicateRequest.body) !== "bond_request_duplicate:active") {
       throw new Error(`duplicate_active_failed:${duplicateRequest.response.status}:${trpcErrorMessage(duplicateRequest.body)}`);
@@ -234,6 +272,7 @@ const main = async () => {
     }
     phase("gate-revoked", { status: gateAfterRevoke.response.status, message: trpcErrorMessage(gateAfterRevoke.body) });
   } finally {
+    await closeDashboard();
     await app.close();
   }
 };

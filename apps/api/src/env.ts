@@ -3,7 +3,8 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { z } from "zod";
 
-const envFiles = [resolve(process.cwd(), ".env"), resolve(process.cwd(), ".env.example")];
+const candidateRoots = [process.cwd(), resolve(process.cwd(), "../..")];
+const envFiles = candidateRoots.flatMap((root) => [resolve(root, ".env"), resolve(root, ".env.example")]);
 
 for (const file of envFiles) {
   if (existsSync(file)) {

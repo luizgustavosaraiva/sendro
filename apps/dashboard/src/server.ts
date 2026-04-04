@@ -5,7 +5,7 @@ import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
-import { getCurrentUser } from "./lib/trpc";
+import { getDashboardCompanyViewModel } from "./lib/trpc";
 import { env } from "./lib/env";
 
 const parseBody = async (request: import("node:http").IncomingMessage) => {
@@ -57,7 +57,7 @@ const requestToFetchRequest = (request: import("node:http").IncomingMessage) => 
   return new Request(url.toString(), { headers, method: request.method });
 };
 
-const server = createServer(async (request, response) => {
+export const server = createServer(async (request, response) => {
   try {
     if (!request.url) {
       sendText(response, "Missing request URL", 400);
@@ -134,8 +134,8 @@ const server = createServer(async (request, response) => {
         return;
       }
 
-      const currentUser = await getCurrentUser(request.headers.cookie ?? null);
-      if (!currentUser?.user) {
+      const viewModel = await getDashboardCompanyViewModel(request.headers.cookie ?? null);
+      if (!viewModel?.user) {
         sendHtml(
           response,
           `<!DOCTYPE html><html><body><main><h1>Dashboard indisponível</h1><p role="alert">SSR session resolved but tRPC user.me failed.</p></main></body></html>`,
@@ -144,7 +144,7 @@ const server = createServer(async (request, response) => {
         return;
       }
 
-      sendHtml(response, renderDashboardPage(currentUser));
+      sendHtml(response, renderDashboardPage(viewModel));
       return;
     }
 
@@ -171,6 +171,18 @@ const server = createServer(async (request, response) => {
   }
 });
 
-server.listen(3000, "127.0.0.1", () => {
-  console.log("dashboard_ready:http://127.0.0.1:3000");
-});
+export const startDashboard = () =>
+  new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(3000, "127.0.0.1", () => {
+      server.off("error", reject);
+      console.log("dashboard_ready:http://127.0.0.1:3000");
+      resolve();
+    });
+  });
+
+const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
+
+if (isMain) {
+  void startDashboard();
+}
