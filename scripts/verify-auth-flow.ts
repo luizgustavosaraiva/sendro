@@ -24,7 +24,10 @@ const main = async () => {
       const cookieJar: string[] = [];
       const signupResponse = await fetch("http://127.0.0.1:3001/api/auth/sign-up/email", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          origin: "http://localhost:3000"
+        },
         body: JSON.stringify(payload),
         redirect: "manual"
       });

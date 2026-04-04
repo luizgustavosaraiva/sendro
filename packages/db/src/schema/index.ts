@@ -369,6 +369,10 @@ export const deliveryEventsRelations = relations(deliveryEvents, ({ one }) => ({
 }));
 
 export const schema = {
+  user: users,
+  session: sessions,
+  account: accounts,
+  verification: verifications,
   entityRoleEnum,
   bondEntityTypeEnum,
   bondStatusEnum,

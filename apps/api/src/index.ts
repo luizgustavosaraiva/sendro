@@ -20,6 +20,9 @@ export const buildApp = async () => {
   app.all("/api/auth/*", async (request, reply) => {
     const url = new URL(request.url, env.API_URL);
     const headers = fromNodeHeaders(request.headers);
+    if (!headers.has("origin")) {
+      headers.set("origin", env.DASHBOARD_URL);
+    }
     const body = request.method === "GET" || request.method === "HEAD"
       ? undefined
       : JSON.stringify(request.body ?? null);

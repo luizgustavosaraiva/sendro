@@ -52,13 +52,20 @@ describe("auth integration", () => {
         ...(scenario.phone ? { phone: scenario.phone } : {})
       };
 
-      const registerResponse = await agent.post("/api/auth/sign-up/email").send(registerPayload);
+      const registerResponse = await agent
+        .post("/api/auth/sign-up/email")
+        .set("origin", "http://localhost:3000")
+        .send(registerPayload);
+
       expect(registerResponse.status, registerResponse.text).toBeLessThan(400);
       const setCookieHeader = registerResponse.headers["set-cookie"];
       const setCookieValue = Array.isArray(setCookieHeader) ? setCookieHeader.join(";") : String(setCookieHeader ?? "");
       expect(setCookieValue).toContain("better-auth");
 
-      const sessionResponse = await agent.get("/api/auth/get-session");
+      const sessionResponse = await agent
+        .get("/api/auth/get-session")
+        .set("origin", "http://localhost:3000");
+
       expect(sessionResponse.status, sessionResponse.text).toBe(200);
       expect(sessionResponse.body.user.email).toBe(registerPayload.email);
       expect(sessionResponse.body.user.role).toBe(scenario.role);
@@ -73,10 +80,6 @@ describe("auth integration", () => {
       expect(data.profile.name).toBe(registerPayload.name);
       expect(Boolean(data.profile.stripeCustomerId)).toBe(scenario.expectedStripe);
       expect(data.diagnostics.role).toBe(scenario.role);
-    });
-  }
-});
-rio.role);
     });
   }
 });

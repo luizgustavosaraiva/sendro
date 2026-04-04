@@ -18,5 +18,33 @@ services:
     labels:
       dev.sendro.description: "Local PostgreSQL for S01 auth and Drizzle migration verification"
 
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://sendro:sendro@postgres:5432/sendro
+      API_URL: http://api:3001
+      DASHBOARD_URL: http://dashboard:3000
+      BETTER_AUTH_SECRET: 0123456789abcdef0123456789abcdef
+      STRIPE_API_KEY: sk_test_sendro_local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: apps/dashboard/Dockerfile
+    environment:
+      API_URL: http://api:3001
+      DASHBOARD_URL: http://dashboard:3000
+    depends_on:
+      - api
+    ports:
+      - "3000:3000"
+
 volumes:
   postgres-data:
