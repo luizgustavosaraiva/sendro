@@ -1,9 +1,11 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import { TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { fromNodeHeaders } from "better-auth/node";
 import { auth } from "./auth";
 import { env } from "./env";
+import { lookupInvitationByToken } from "./lib/invitations";
 import { ensureProfileForUser } from "./routes/auth/register";
 import { appRouter } from "./trpc/router";
 import { createTrpcContext } from "./trpc/context";
@@ -15,6 +17,37 @@ const applySetCookie = (reply: import("fastify").FastifyReply, headers: Headers)
   }
 };
 
+const sendPublicError = (
+  reply: import("fastify").FastifyReply,
+  error: unknown,
+  fallbackMessage: string,
+  logger?: { error: (payload: object, message: string) => void }
+) => {
+  if (error instanceof TRPCError) {
+    const status =
+      error.code === "NOT_FOUND"
+        ? 404
+        : error.code === "BAD_REQUEST"
+          ? 400
+          : error.code === "FORBIDDEN"
+            ? 403
+            : error.code === "CONFLICT"
+              ? 409
+              : error.code === "UNAUTHORIZED"
+                ? 401
+                : 500;
+
+    reply.status(status).send({
+      code: error.code,
+      message: error.message
+    });
+    return;
+  }
+
+  logger?.error({ event: "public.route.error", error }, fallbackMessage);
+  reply.status(500).send({ code: "INTERNAL_SERVER_ERROR", message: fallbackMessage });
+};
+
 export const buildApp = async () => {
   const app = Fastify({ logger: env.NODE_ENV !== "test" });
 
@@ -23,16 +56,18 @@ export const buildApp = async () => {
     credentials: true
   });
 
-  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+  app.get("/health", async () => ({ status: "ok" }));
+
+  app.get("/api/invitations/:token", async (request, reply) => {
+    const { token } = request.params as { token: string };
+
     try {
-      const payload = typeof body === "string" ? body : body.toString("utf8");
-      done(null, payload ? JSON.parse(payload) : {});
+      const invitation = await lookupInvitationByToken(token);
+      reply.send(invitation);
     } catch (error) {
-      done(error as Error, undefined);
+      sendPublicError(reply, error, "Invitation lookup failed.", app.log);
     }
   });
-
-  app.get("/health", async () => ({ status: "ok" }));
 
   app.post("/api/auth/sign-up/email", async (request, reply) => {
     const headers = fromNodeHeaders(request.headers);

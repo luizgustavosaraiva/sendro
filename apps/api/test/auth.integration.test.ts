@@ -32,6 +32,7 @@ describe.skipIf(!process.env.DATABASE_URL)("auth integration", () => {
 
   beforeAll(async () => {
     app = await buildApp();
+    await app.ready();
   }, 30000);
 
   afterAll(async () => {

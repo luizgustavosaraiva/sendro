@@ -3,6 +3,11 @@ import { assertDb, companies, drivers, retailers } from "@repo/db";
 import {
   bondDecisionSchema,
   companyBondListsSchema,
+  companyInvitationListSchema,
+  createInvitationSchema,
+  lookupInvitationResultSchema,
+  redeemInvitationResultSchema,
+  redeemInvitationSchema,
   retailerBondRequestSchema,
   retailerCompanyBondGateResultSchema,
   retailerCompanyBondGateSchema
@@ -14,7 +19,13 @@ import {
   listCompanyBondLists,
   requestRetailerBond
 } from "../lib/bonds";
-import { protectedProcedure, router } from "./procedures";
+import {
+  createCompanyInvitation,
+  listCompanyInvitations,
+  lookupInvitationByToken,
+  redeemInvitation
+} from "../lib/invitations";
+import { protectedProcedure, publicProcedure, router } from "./procedures";
 
 export const appRouter = router({
   user: router({
@@ -59,6 +70,22 @@ export const appRouter = router({
       .input(retailerCompanyBondGateSchema)
       .output(retailerCompanyBondGateResultSchema)
       .query(async ({ ctx, input }) => assertRetailerHasActiveBond({ companyId: input.companyId, user: ctx.session.user as never }))
+  }),
+  invitations: router({
+    createCompanyInvitation: protectedProcedure
+      .input(createInvitationSchema)
+      .mutation(async ({ ctx, input }) => createCompanyInvitation({ user: ctx.session.user as never, data: input })),
+    listCompanyInvitations: protectedProcedure
+      .output(companyInvitationListSchema)
+      .query(async ({ ctx }) => listCompanyInvitations(ctx.session.user as never)),
+    redeemInvitation: protectedProcedure
+      .input(redeemInvitationSchema)
+      .output(redeemInvitationResultSchema)
+      .mutation(async ({ ctx, input }) => redeemInvitation({ user: ctx.session.user as never, token: input.token })),
+    lookupInvitationByToken: publicProcedure
+      .input(redeemInvitationSchema)
+      .output(lookupInvitationResultSchema)
+      .query(async ({ input }) => lookupInvitationByToken(input.token))
   })
 });
 
