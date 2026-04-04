@@ -6,16 +6,25 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./client": "./src/client.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json",
-    "db:generate": "echo 'drizzle generate placeholder for T01'",
-    "db:migrate": "echo 'drizzle migrate placeholder for T01'"
+    "db:generate": "drizzle-kit generate --config drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate --config drizzle.config.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@repo/shared": "workspace:*",
+    "drizzle-orm": "^0.44.2",
+    "pg": "^8.16.3"
+  },
   "devDependencies": {
+    "@types/node": "^24.6.0",
+    "@types/pg": "^8.15.5",
+    "drizzle-kit": "^0.31.4",
     "typescript": "^5.8.3"
   }
 }
