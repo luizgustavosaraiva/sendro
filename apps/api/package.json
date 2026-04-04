@@ -7,14 +7,29 @@
   "types": "./src/index.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "node --watch src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "vitest run --config ../../vitest.config.ts apps/api/test/auth.integration.test.ts",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@fastify/cors": "^11.2.0",
     "@repo/db": "workspace:*",
-    "@repo/shared": "workspace:*"
+    "@repo/shared": "workspace:*",
+    "@trpc/server": "^11.16.0",
+    "better-auth": "^1.5.6",
+    "dotenv": "^17.4.0",
+    "drizzle-orm": "^0.44.2",
+    "fastify": "^5.8.4",
+    "stripe": "^22.0.0",
+    "zod": "^3.24.3"
   },
   "devDependencies": {
-    "typescript": "^5.8.3"
+    "@types/node": "^24.6.0",
+    "@types/supertest": "^7.2.0",
+    "supertest": "^7.2.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
   }
 }

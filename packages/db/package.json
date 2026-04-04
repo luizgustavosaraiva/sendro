@@ -24,6 +24,7 @@
   "devDependencies": {
     "@types/node": "^24.6.0",
     "@types/pg": "^8.15.5",
+    "dotenv": "^17.4.0",
     "drizzle-kit": "^0.31.4",
     "typescript": "^5.8.3"
   }
