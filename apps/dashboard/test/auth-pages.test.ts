@@ -22,7 +22,35 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Telefone");
   });
 
-  it("renders authenticated company dashboard with separated bond sections", () => {
+  it("renders invite-aware register state with hidden token and driver lock", () => {
+    const html = RegisterPage({
+      inviteToken: "invitetoken1234567890",
+      inviteStatus: "pending",
+      inviteCompanyName: "ACME Company",
+      inviteCompanySlug: "acme-company"
+    });
+
+    expect(html).toContain('data-testid="invite-card"');
+    expect(html).toContain('data-testid="invite-token">invitetoken1234567890');
+    expect(html).toContain('data-testid="invite-status">pending');
+    expect(html).toContain('input type="hidden" name="inviteToken" value="invitetoken1234567890"');
+    expect(html).toContain('input type="hidden" name="role" value="driver"');
+    expect(html).toContain('select name="role" id="role-select" disabled');
+    expect(html).toContain("ACME Company");
+  });
+
+  it("renders wrong-role invite diagnostic copy", () => {
+    const html = RegisterPage({
+      inviteToken: "invitetoken1234567890",
+      inviteStatus: "invalid-role",
+      inviteError: "Este convite exige uma conta de entregador."
+    });
+
+    expect(html).toContain('data-testid="invite-invalid-role"');
+    expect(html).toContain("Este convite é destinado a entregadores.");
+  });
+
+  it("renders authenticated company dashboard with separated bond sections and invitations", () => {
     const html = renderDashboardPage({
       user: {
         name: "ACME Company",
@@ -85,6 +113,29 @@ describe("dashboard auth pages", () => {
             entityLifecycle: "active"
           }
         ]
+      },
+      invitations: {
+        state: "loaded",
+        generatedInvitation: {
+          invitationId: "550e8400-e29b-41d4-a716-446655440010",
+          token: "generatedtoken123456",
+          inviteUrl: "http://localhost:3000/invite/generatedtoken123456"
+        },
+        invitations: [
+          {
+            invitationId: "550e8400-e29b-41d4-a716-446655440010",
+            companyId: "550e8400-e29b-41d4-a716-446655440000",
+            token: "generatedtoken123456",
+            channel: "link",
+            status: "pending",
+            invitedContact: "driver@sendro.test",
+            expiresAt: "2026-01-04T00:00:00.000Z",
+            acceptedAt: null,
+            createdByUserId: "550e8400-e29b-41d4-a716-446655440011",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z"
+          }
+        ]
       }
     });
 
@@ -93,14 +144,20 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Lojistas vinculados");
     expect(html).toContain("Solicitações pendentes");
     expect(html).toContain("Entregadores vinculados");
+    expect(html).toContain("Convites de entregador");
     expect(html).toContain("Loja Centro");
     expect(html).toContain("Loja Norte");
     expect(html).toContain("Motorista Sul");
     expect(html).toContain('data-testid="bonds-state">loaded');
+    expect(html).toContain('data-testid="invitations-state">loaded');
+    expect(html).toContain('data-testid="generate-invitation-button"');
+    expect(html).toContain('data-testid="generated-invitation"');
+    expect(html).toContain('data-testid="generated-invite-url">http://localhost:3000/invite/generatedtoken123456');
+    expect(html).toContain("driver@sendro.test");
     expect(html).toContain("cus_123");
   });
 
-  it("renders stable empty states for company bonds", () => {
+  it("renders stable empty states for company bonds and invitations", () => {
     const html = renderDashboardPage({
       user: {
         name: "Empty Company",
@@ -121,6 +178,10 @@ describe("dashboard auth pages", () => {
         activeRetailers: [],
         pendingRetailers: [],
         activeDrivers: []
+      },
+      invitations: {
+        state: "empty",
+        invitations: []
       }
     });
 
@@ -129,9 +190,11 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Nenhum lojista vinculado no momento.");
     expect(html).toContain("Nenhuma solicitação pendente no momento.");
     expect(html).toContain("Nenhum entregador vinculado no momento.");
+    expect(html).toContain('data-testid="invitation-list-empty"');
+    expect(html).toContain("Nenhum convite gerado no momento.");
   });
 
-  it("renders stable upstream failure copy for bonds", () => {
+  it("renders stable upstream failure copy for bonds and invitations", () => {
     const html = renderDashboardPage({
       user: {
         name: "Error Company",
@@ -153,13 +216,20 @@ describe("dashboard auth pages", () => {
         activeRetailers: [],
         pendingRetailers: [],
         activeDrivers: []
+      },
+      invitations: {
+        state: "error",
+        error: "A sessão foi resolvida, mas os convites não puderam ser carregados. Diagnóstico: trpc_invitations_listCompanyInvitations_failed:500:boom",
+        invitations: []
       }
     });
 
     expect(html).toContain('role="alert"');
     expect(html).toContain('data-testid="bonds-error"');
+    expect(html).toContain('data-testid="invitation-error"');
     expect(html).toContain("A sessão foi resolvida, mas os vínculos da empresa não puderam ser carregados.");
     expect(html).toContain("trpc_bonds_listCompanyBonds_failed:500:boom");
+    expect(html).toContain("trpc_invitations_listCompanyInvitations_failed:500:boom");
   });
 
   it("renders stable non-company diagnostic copy", () => {
@@ -184,11 +254,18 @@ describe("dashboard auth pages", () => {
         activeRetailers: [],
         pendingRetailers: [],
         activeDrivers: []
+      },
+      invitations: {
+        state: "not-company",
+        error: "Somente contas empresa podem gerar e listar convites.",
+        invitations: []
       }
     });
 
     expect(html).toContain('data-testid="bonds-not-company"');
+    expect(html).toContain('data-testid="invitation-not-company"');
     expect(html).toContain("Somente contas empresa visualizam vínculos da empresa no dashboard.");
+    expect(html).toContain("Somente contas empresa podem gerar e listar convites.");
   });
 
   it("marks dashboard as a protected path", () => {

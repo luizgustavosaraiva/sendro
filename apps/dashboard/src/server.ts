@@ -5,7 +5,12 @@ import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
-import { getDashboardCompanyViewModel } from "./lib/trpc";
+import {
+  getCurrentUser,
+  getDashboardCompanyViewModel,
+  lookupInvitationByToken,
+  redeemInvitationByToken
+} from "./lib/trpc";
 import { env } from "./lib/env";
 
 const parseBody = async (request: import("node:http").IncomingMessage) => {
@@ -57,6 +62,67 @@ const requestToFetchRequest = (request: import("node:http").IncomingMessage) => 
   return new Request(url.toString(), { headers, method: request.method });
 };
 
+const escapeHtml = (value: string) =>
+  value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+
+const registerPageOptionsForToken = async (token: string) => {
+  try {
+    const invitation = await lookupInvitationByToken(token);
+
+    if (invitation.status !== "pending") {
+      return {
+        inviteToken: token,
+        inviteStatus: invitation.status,
+        inviteCompanyName: invitation.companyName,
+        inviteCompanySlug: invitation.companySlug,
+        inviteError: `Este convite não está mais disponível para aceite automático. Diagnóstico: invitation_status_${invitation.status}`
+      };
+    }
+
+    return {
+      inviteToken: token,
+      inviteStatus: invitation.status,
+      inviteCompanyName: invitation.companyName,
+      inviteCompanySlug: invitation.companySlug
+    };
+  } catch (error) {
+    return {
+      inviteToken: token,
+      inviteStatus: "pending" as const,
+      inviteError: error instanceof Error ? error.message : "invitation_lookup_failed"
+    };
+  }
+};
+
+const renderRegisterError = (
+  response: import("node:http").ServerResponse,
+  options: Parameters<typeof RegisterPage>[0],
+  message: string,
+  statusCode = 400
+) => {
+  sendHtml(
+    response,
+    `<!DOCTYPE html><html><body>${RegisterPage({
+      ...options,
+      values: options?.values,
+      inviteToken: options?.inviteToken,
+      inviteStatus: options?.inviteStatus,
+      inviteCompanyName: options?.inviteCompanyName,
+      inviteCompanySlug: options?.inviteCompanySlug,
+      inviteError: options?.inviteError
+    }).replace(
+      "</main>",
+      `<div role=\"alert\" style=\"margin-top:16px;padding:12px;border-radius:10px;background:#fef2f2;color:#991b1b;\">${escapeHtml(message)}</div></main>`
+    )}</body></html>`,
+    statusCode
+  );
+};
+
 export const server = createServer(async (request, response) => {
   try {
     if (!request.url) {
@@ -96,13 +162,91 @@ export const server = createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/register") {
-      sendHtml(response, RegisterPage());
+      const token = url.searchParams.get("invite") ?? undefined;
+      const options = token ? await registerPageOptionsForToken(token) : undefined;
+      sendHtml(response, RegisterPage(options));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/invite/")) {
+      const token = decodeURIComponent(url.pathname.replace(/^\/invite\//, "")).trim();
+      if (!token) {
+        redirect(response, "/register");
+        return;
+      }
+
+      const session = await getSessionFromRequest(requestToFetchRequest(request));
+      if (session?.user) {
+        const currentUser = await getCurrentUser(request.headers.cookie ?? null);
+        if (!currentUser?.user) {
+          redirect(response, `/register?invite=${encodeURIComponent(token)}`);
+          return;
+        }
+
+        if (currentUser.user.role !== "driver") {
+          sendHtml(
+            response,
+            RegisterPage({
+              ...(await registerPageOptionsForToken(token)),
+              inviteStatus: "invalid-role",
+              inviteError: "Este convite exige uma conta de entregador. Faça logout e conclua o cadastro como entregador."
+            }),
+            409
+          );
+          return;
+        }
+
+        try {
+          const redeemed = await redeemInvitationByToken(token, request.headers.cookie ?? null);
+          if (!redeemed) {
+            throw new Error("invitation_redeem_unauthorized");
+          }
+          redirect(response, `/dashboard?invitationRedeemed=${encodeURIComponent(redeemed.invitationId)}`);
+        } catch (error) {
+          sendHtml(
+            response,
+            RegisterPage({
+              ...(await registerPageOptionsForToken(token)),
+              inviteError: error instanceof Error ? error.message : "invitation_redeem_failed"
+            }),
+            409
+          );
+        }
+        return;
+      }
+
+      redirect(response, `/register?invite=${encodeURIComponent(token)}`);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/register") {
       const form = await parseBody(request);
-      const role = String(form.role ?? "company") as "company" | "retailer" | "driver";
+      const inviteToken = String(form.inviteToken ?? "").trim() || null;
+      const inviteOptions = inviteToken ? await registerPageOptionsForToken(inviteToken) : undefined;
+      const role = String(form.role ?? (inviteToken ? "driver" : "company")) as "company" | "retailer" | "driver";
+      const values = {
+        name: String(form.name ?? ""),
+        email: String(form.email ?? ""),
+        companyName: String(form.companyName ?? ""),
+        retailerName: String(form.retailerName ?? ""),
+        driverName: String(form.driverName ?? ""),
+        phone: String(form.phone ?? "")
+      };
+
+      if (inviteToken && role !== "driver") {
+        sendHtml(
+          response,
+          RegisterPage({
+            ...inviteOptions,
+            selectedRole: role,
+            values,
+            inviteStatus: "invalid-role",
+            inviteError: "Este convite exige cadastro como entregador."
+          }),
+          400
+        );
+        return;
+      }
 
       try {
         const upstream = await authClient.register({
@@ -115,14 +259,79 @@ export const server = createServer(async (request, response) => {
           ...(role === "driver" ? { driverName: String(form.driverName ?? ""), phone: String(form.phone ?? "") } : {})
         } as never);
         forwardCookies(upstream, response);
+
+        if (inviteToken) {
+          const cookieHeader = upstream.headers.get("set-cookie") ?? response.getHeader("set-cookie");
+          const normalizedCookieHeader = Array.isArray(cookieHeader) ? cookieHeader.join("; ") : typeof cookieHeader === "string" ? cookieHeader : null;
+
+          try {
+            const redeemed = await redeemInvitationByToken(inviteToken, normalizedCookieHeader);
+            if (!redeemed) {
+              throw new Error("invitation_redeem_unauthorized");
+            }
+            redirect(response, `/dashboard?invitationRedeemed=${encodeURIComponent(redeemed.invitationId)}`);
+          } catch (error) {
+            sendHtml(
+              response,
+              RegisterPage({
+                ...inviteOptions,
+                selectedRole: "driver",
+                values,
+                inviteError: `Cadastro concluído, mas o aceite automático falhou. Diagnóstico: ${error instanceof Error ? error.message : "invitation_redeem_failed"}`
+              }),
+              409
+            );
+          }
+          return;
+        }
+
         redirect(response, "/dashboard");
       } catch (error) {
         sendHtml(
           response,
-          `<!DOCTYPE html><html><body><main><h1>Cadastro Sendro</h1><p role="alert">${error instanceof Error ? error.message : "register_failed"}</p></main></body></html>`,
+          RegisterPage({
+            ...inviteOptions,
+            selectedRole: role,
+            values,
+            inviteError: inviteOptions?.inviteError
+          }).replace(
+            "</main>",
+            `<div role=\"alert\" style=\"margin-top:16px;padding:12px;border-radius:10px;background:#fef2f2;color:#991b1b;\">${escapeHtml(error instanceof Error ? error.message : "register_failed")}</div></main>`
+          ),
           400
         );
       }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/invitations") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const form = await parseBody(request);
+      const channel = String(form.channel ?? "link") as "whatsapp" | "email" | "link" | "manual";
+      const invitedContact = String(form.invitedContact ?? "").trim() || null;
+      const viewModel = await getDashboardCompanyViewModel(request.headers.cookie ?? null, {
+        createInvitation: {
+          channel,
+          invitedContact
+        }
+      });
+
+      if (!viewModel?.user) {
+        sendHtml(
+          response,
+          `<!DOCTYPE html><html><body><main><h1>Dashboard indisponível</h1><p role="alert">SSR session resolved but invitation generation failed before rendering.</p></main></body></html>`,
+          502
+        );
+        return;
+      }
+
+      sendHtml(response, renderDashboardPage(viewModel));
       return;
     }
 

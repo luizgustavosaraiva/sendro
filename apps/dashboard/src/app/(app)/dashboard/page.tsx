@@ -8,6 +8,19 @@ const escapeHtml = (value: string) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
+const formatDate = (value: string | null | undefined) => {
+  if (!value) {
+    return "n/a";
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return date.toISOString();
+};
+
 const renderBondItems = (
   items: Array<{
     bondId: string;
@@ -40,6 +53,29 @@ const renderBondItems = (
     .join("")}</ul>`;
 };
 
+const renderInvitationItems = (
+  items: DashboardCompanyViewModel["invitations"]["invitations"],
+  emptyCopy: string
+) => {
+  if (items.length === 0) {
+    return `<p data-testid="invitation-list-empty">${escapeHtml(emptyCopy)}</p>`;
+  }
+
+  return `<ul data-testid="invitation-list">${items
+    .map(
+      (item) => `<li>
+        <strong>${escapeHtml(item.channel)}</strong>
+        <div>status: <code>${escapeHtml(item.status)}</code></div>
+        <div>convite: <code>${escapeHtml(item.invitationId)}</code></div>
+        <div>token: <code data-testid="invitation-token">${escapeHtml(item.token)}</code></div>
+        <div>contato: <code>${escapeHtml(item.invitedContact ?? "n/a")}</code></div>
+        <div>expira em: <code>${escapeHtml(formatDate(item.expiresAt))}</code></div>
+        <div>aceito em: <code>${escapeHtml(formatDate(item.acceptedAt))}</code></div>
+      </li>`
+    )
+    .join("")}</ul>`;
+};
+
 export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!DOCTYPE html>
 <html lang="pt-BR">
   <head>
@@ -55,6 +91,12 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
       .bond-section { border: 1px solid #334155; border-radius: 12px; padding: 16px; background: rgba(2,6,23,.55); }
       .status-error { border-color: #ef4444; }
       .status-empty { border-color: #f59e0b; }
+      .invite-form { display: grid; gap: 12px; margin-bottom: 16px; }
+      .invite-form-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
+      label { display: grid; gap: 6px; }
+      input, select, button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #020617; color: #e2e8f0; }
+      button { cursor: pointer; background: #2563eb; border-color: #2563eb; }
+      .invite-generated { margin-bottom: 16px; padding: 16px; border-radius: 12px; background: rgba(37,99,235,.12); border: 1px solid #2563eb; }
       code { background: #020617; padding: 2px 6px; border-radius: 6px; }
       ul { padding-left: 20px; }
       li + li { margin-top: 12px; }
@@ -80,7 +122,39 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
           <li>stripeStage: <code>${escapeHtml(viewModel.diagnostics?.stripeStage ?? "unknown")}</code></li>
           <li>stripeCustomerId: <code>${escapeHtml(viewModel.profile?.stripeCustomerId ?? "none")}</code></li>
           <li>bondsState: <code data-testid="bonds-state">${escapeHtml(viewModel.bondsState)}</code></li>
+          <li>invitationsState: <code data-testid="invitations-state">${escapeHtml(viewModel.invitations.state)}</code></li>
         </ul>
+      </section>
+      <section class="card ${viewModel.invitations.state === "error" ? "status-error" : viewModel.invitations.state === "empty" ? "status-empty" : ""}">
+        <h2>Convites de entregador</h2>
+        <p>Gere um link SSR e acompanhe o estado dos convites emitidos por esta empresa.</p>
+        ${viewModel.invitations.error ? `<p role="alert" data-testid="invitation-error">${escapeHtml(viewModel.invitations.error)}</p>` : ""}
+        ${viewModel.invitations.generatedInvitation
+          ? `<div class="invite-generated" data-testid="generated-invitation">
+              <strong>Convite gerado com sucesso</strong>
+              <div>invitationId: <code>${escapeHtml(viewModel.invitations.generatedInvitation.invitationId)}</code></div>
+              <div>token: <code>${escapeHtml(viewModel.invitations.generatedInvitation.token)}</code></div>
+              <div>url: <code data-testid="generated-invite-url">${escapeHtml(viewModel.invitations.generatedInvitation.inviteUrl)}</code></div>
+            </div>`
+          : ""}
+        ${viewModel.invitations.state === "not-company" ? '<p data-testid="invitation-not-company">Somente contas empresa podem gerar e listar convites.</p>' : ""}
+        <form class="invite-form" method="post" action="/dashboard/invitations">
+          <div class="invite-form-row">
+            <label>Canal
+              <select name="channel" data-testid="invitation-channel-select">
+                <option value="link">Link</option>
+                <option value="whatsapp">WhatsApp</option>
+                <option value="email">E-mail</option>
+                <option value="manual">Manual</option>
+              </select>
+            </label>
+            <label>Contato (opcional)
+              <input name="invitedContact" placeholder="email, telefone ou apelido" data-testid="invited-contact-input" />
+            </label>
+          </div>
+          <button type="submit" data-testid="generate-invitation-button">Gerar link de convite</button>
+        </form>
+        ${renderInvitationItems(viewModel.invitations.invitations, "Nenhum convite gerado no momento.")}
       </section>
       <section class="card ${viewModel.bondsState === "error" ? "status-error" : viewModel.bondsState === "empty" ? "status-empty" : ""}">
         <h2>Vínculos da empresa</h2>
