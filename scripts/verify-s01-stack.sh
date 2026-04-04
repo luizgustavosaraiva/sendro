@@ -12,7 +12,30 @@ assert_cmd() {
   fi
 }
 
-assert_cmd pnpm
+ensure_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local candidates=(
+    "/c/ProgramData/chocolatey/bin/pnpm"
+    "/mnt/c/ProgramData/chocolatey/bin/pnpm"
+    "C:/ProgramData/chocolatey/bin/pnpm"
+  )
+
+  local candidate
+  for candidate in "${candidates[@]}"; do
+    if [[ -x "$candidate" ]]; then
+      export PATH="$(dirname "$candidate"):$PATH"
+      return 0
+    fi
+  done
+
+  echo "missing_dependency:pnpm" >&2
+  exit 1
+}
+
+ensure_pnpm
 assert_cmd bash
 
 if ! command -v docker >/dev/null 2>&1; then

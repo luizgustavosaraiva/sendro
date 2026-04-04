@@ -1,11 +1,19 @@
-import "./env";
-import cors from "@fastify/cors";
 import Fastify from "fastify";
+import cors from "@fastify/cors";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { fromNodeHeaders } from "better-auth/node";
 import { auth } from "./auth";
 import { env } from "./env";
 import { ensureProfileForUser } from "./routes/auth/register";
-import { registerTrpc } from "./plugins/trpc";
+import { appRouter } from "./trpc/router";
+import { createTrpcContext } from "./trpc/context";
+
+const applySetCookie = (reply: import("fastify").FastifyReply, headers: Headers) => {
+  const setCookie = headers.get("set-cookie");
+  if (setCookie) {
+    reply.header("set-cookie", setCookie);
+  }
+};
 
 export const buildApp = async () => {
   const app = Fastify({ logger: env.NODE_ENV !== "test" });
@@ -15,40 +23,41 @@ export const buildApp = async () => {
     credentials: true
   });
 
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+    try {
+      const payload = typeof body === "string" ? body : body.toString("utf8");
+      done(null, payload ? JSON.parse(payload) : {});
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
+
   app.get("/health", async () => ({ status: "ok" }));
 
-  app.all("/api/auth/*", async (request, reply) => {
-    const url = new URL(request.url, env.API_URL);
+  app.post("/api/auth/sign-up/email", async (request, reply) => {
     const headers = fromNodeHeaders(request.headers);
     if (!headers.has("origin")) {
       headers.set("origin", env.DASHBOARD_URL);
     }
-    const body = request.method === "GET" || request.method === "HEAD"
-      ? undefined
-      : JSON.stringify(request.body ?? null);
 
-    const authRequest = new Request(url.toString(), {
-      method: request.method,
+    const authResponse = await auth.api.signUpEmail({
       headers,
-      body
+      body: request.body as Record<string, unknown>,
+      returnHeaders: true
     });
 
-    const authResponse = await auth.handler(authRequest);
-    reply.status(authResponse.status);
-    authResponse.headers.forEach((value: string, key: string) => reply.header(key, value));
+    applySetCookie(reply, authResponse.headers);
 
-    const pathname = new URL(authRequest.url).pathname;
-    if (authResponse.ok && pathname.endsWith("/sign-up/email")) {
+    if (authResponse.response?.user?.id && authResponse.response.user.role) {
       try {
-        const session = await auth.api.getSession({ headers: authResponse.headers });
-        const sessionUser = session?.user as { id?: string; role?: "company" | "retailer" | "driver" } | undefined;
-        if (sessionUser?.id && sessionUser.role) {
-          const bootstrap = await ensureProfileForUser({ userId: sessionUser.id, role: sessionUser.role });
-          app.log.info(
-            { event: "auth.profile.bootstrap", role: sessionUser.role, created: bootstrap.created, stripeStage: bootstrap.stripeStage },
-            "Profile bootstrap completed."
-          );
-        }
+        const bootstrap = await ensureProfileForUser({
+          userId: authResponse.response.user.id,
+          role: authResponse.response.user.role as "company" | "retailer" | "driver"
+        });
+        app.log.info(
+          { event: "auth.profile.bootstrap", role: authResponse.response.user.role, created: bootstrap.created, stripeStage: bootstrap.stripeStage },
+          "Profile bootstrap completed."
+        );
       } catch (error) {
         app.log.error({ event: "auth.profile.bootstrap.error", error }, "Profile bootstrap failed after sign-up.");
         reply.status(502).send({
@@ -59,11 +68,56 @@ export const buildApp = async () => {
       }
     }
 
-    const text = authResponse.body ? await authResponse.text() : null;
-    reply.send(text);
+    reply.send(authResponse.response);
   });
 
-  await registerTrpc(app);
+  app.post("/api/auth/sign-in/email", async (request, reply) => {
+    const headers = fromNodeHeaders(request.headers);
+    if (!headers.has("origin")) {
+      headers.set("origin", env.DASHBOARD_URL);
+    }
+
+    const authResponse = await auth.api.signInEmail({
+      headers,
+      body: request.body as Record<string, unknown>,
+      returnHeaders: true
+    });
+
+    applySetCookie(reply, authResponse.headers);
+    reply.send(authResponse.response);
+  });
+
+  app.get("/api/auth/get-session", async (request, reply) => {
+    const headers = fromNodeHeaders(request.headers);
+    if (!headers.has("origin")) {
+      headers.set("origin", env.DASHBOARD_URL);
+    }
+
+    const session = await auth.api.getSession({ headers });
+    reply.send(session);
+  });
+
+  app.all("/trpc/*", async (request, reply) => {
+    const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
+    const requestBody = request.method === "GET" || request.method === "HEAD"
+      ? undefined
+      : JSON.stringify(request.body ?? null);
+
+    const response = await fetchRequestHandler({
+      endpoint: "/trpc",
+      req: new Request(url.toString(), {
+        method: request.method,
+        headers: request.headers as HeadersInit,
+        body: requestBody
+      }),
+      router: appRouter,
+      createContext: () => createTrpcContext({ req: request, res: reply })
+    });
+
+    reply.status(response.status);
+    response.headers.forEach((value, key) => reply.header(key, value));
+    reply.send(await response.text());
+  });
 
   return app;
 };

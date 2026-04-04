@@ -1,6 +1,19 @@
 import { eq } from "drizzle-orm";
 import { assertDb, companies, drivers, retailers } from "@repo/db";
+import {
+  bondDecisionSchema,
+  companyBondListsSchema,
+  retailerBondRequestSchema,
+  retailerCompanyBondGateResultSchema,
+  retailerCompanyBondGateSchema
+} from "@repo/shared";
 import { ensureProfileForUser } from "../routes/auth/register";
+import {
+  assertRetailerHasActiveBond,
+  decideRetailerBond,
+  listCompanyBondLists,
+  requestRetailerBond
+} from "../lib/bonds";
 import { protectedProcedure, router } from "./procedures";
 
 export const appRouter = router({
@@ -31,6 +44,21 @@ export const appRouter = router({
         }
       };
     })
+  }),
+  bonds: router({
+    requestRetailerBond: protectedProcedure
+      .input(retailerBondRequestSchema)
+      .mutation(async ({ ctx, input }) => requestRetailerBond({ companyId: input.companyId, user: ctx.session.user as never })),
+    listCompanyBonds: protectedProcedure
+      .output(companyBondListsSchema)
+      .query(async ({ ctx }) => listCompanyBondLists(ctx.session.user as never)),
+    decideRetailerBond: protectedProcedure
+      .input(bondDecisionSchema)
+      .mutation(async ({ ctx, input }) => decideRetailerBond({ bondId: input.bondId, action: input.action, user: ctx.session.user as never })),
+    assertRetailerCompanyActiveBond: protectedProcedure
+      .input(retailerCompanyBondGateSchema)
+      .output(retailerCompanyBondGateResultSchema)
+      .query(async ({ ctx, input }) => assertRetailerHasActiveBond({ companyId: input.companyId, user: ctx.session.user as never }))
   })
 });
 

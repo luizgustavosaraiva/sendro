@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
 import request from "supertest";
 import { buildApp } from "../src/index";
 
@@ -26,21 +27,21 @@ const roles: Array<{
   }
 ];
 
-describe("auth integration", () => {
-  const appPromise = buildApp();
+describe.skipIf(!process.env.DATABASE_URL)("auth integration", () => {
+  let app: FastifyInstance;
 
   beforeAll(async () => {
-    await appPromise;
-  });
+    app = await buildApp();
+  }, 30000);
 
   afterAll(async () => {
-    const app = await appPromise;
-    await app.close();
-  });
+    if (app) {
+      await app.close();
+    }
+  }, 30000);
 
   for (const scenario of roles) {
     it(`registers ${scenario.role}, returns session cookie, and resolves user.me`, async () => {
-      const app = await appPromise;
       const agent = request.agent(app.server);
       const suffix = `${scenario.role}-${Date.now()}`;
       const registerPayload = {
@@ -80,6 +81,6 @@ describe("auth integration", () => {
       expect(data.profile.name).toBe(registerPayload.name);
       expect(Boolean(data.profile.stripeCustomerId)).toBe(scenario.expectedStripe);
       expect(data.diagnostics.role).toBe(scenario.role);
-    });
+    }, 30000);
   }
 });

@@ -1,3 +1,15 @@
+import { config as loadEnv } from "dotenv";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
+const envFiles = [resolve(process.cwd(), ".env"), resolve(process.cwd(), ".env.example")];
+
+for (const file of envFiles) {
+  if (existsSync(file)) {
+    loadEnv({ path: file, override: false });
+  }
+}
+
 import { betterAuth } from "better-auth/minimal";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { assertDb, schema } from "@repo/db";

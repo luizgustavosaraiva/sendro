@@ -66,6 +66,7 @@ describe("db schema", () => {
   it("exports a single schema object for Drizzle wiring", () => {
     expect(Object.keys(schema).sort()).toEqual(
       [
+        "account",
         "accounts",
         "bondEntityTypeEnum",
         "bondStatusEnum",
@@ -84,8 +85,11 @@ describe("db schema", () => {
         "invitations",
         "retailerLifecycleEnum",
         "retailers",
+        "session",
         "sessions",
+        "user",
         "users",
+        "verification",
         "verifications"
       ].sort()
     );

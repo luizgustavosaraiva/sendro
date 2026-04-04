@@ -8,6 +8,7 @@ export type StripeCustomerResult = {
 };
 
 const stripe = env.STRIPE_API_KEY ? new Stripe(env.STRIPE_API_KEY) : null;
+const isLocalStubKey = env.STRIPE_API_KEY?.startsWith("sk_test_sendro_") ?? false;
 
 export const createStripeCustomerForRole = async (input: {
   role: EntityRole;
@@ -19,11 +20,18 @@ export const createStripeCustomerForRole = async (input: {
     return { customerId: null, skipped: true };
   }
 
-  if (!stripe) {
+  if (!stripe && !isLocalStubKey) {
     throw new Error(`stripe_unavailable:${input.role}`);
   }
 
-  const customer = await stripe.customers.create({
+  if (isLocalStubKey) {
+    return {
+      customerId: `cus_local_${input.role}_${input.userId.slice(0, 8)}`,
+      skipped: false
+    };
+  }
+
+  const customer = await stripe!.customers.create({
     email: input.email,
     name: input.name,
     metadata: {

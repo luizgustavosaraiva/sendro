@@ -1,6 +1,17 @@
+import { config as loadEnv } from "dotenv";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
 import * as schema from "./schema/index";
+
+const envFiles = [resolve(process.cwd(), ".env"), resolve(process.cwd(), ".env.example")];
+
+for (const file of envFiles) {
+  if (existsSync(file)) {
+    loadEnv({ path: file, override: false });
+  }
+}
 
 export const createDbClient = (databaseUrl: string) => {
   const pool = new Pool({
