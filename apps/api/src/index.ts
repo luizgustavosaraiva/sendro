@@ -101,7 +101,11 @@ export const buildApp = async () => {
     const url = new URL(request.url, `http://${request.headers.host ?? "localhost"}`);
     const requestBody = request.method === "GET" || request.method === "HEAD"
       ? undefined
-      : JSON.stringify(request.body ?? null);
+      : request.body == null
+        ? undefined
+        : typeof request.body === "string"
+          ? request.body
+          : JSON.stringify(request.body);
 
     const response = await fetchRequestHandler({
       endpoint: "/trpc",

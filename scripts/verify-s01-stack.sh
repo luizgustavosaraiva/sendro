@@ -65,10 +65,15 @@ done
 
 pnpm --filter @repo/db db:migrate >/dev/null
 
-pnpm --filter api start > /tmp/sendro-api.log 2>&1 &
-API_PID=$!
-pnpm --filter dashboard start > /tmp/sendro-dashboard.log 2>&1 &
-DASHBOARD_PID=$!
+if ! curl -fsS http://127.0.0.1:3001/health >/dev/null 2>&1; then
+  pnpm --filter api start > /tmp/sendro-api.log 2>&1 &
+  API_PID=$!
+fi
+
+if ! curl -fsS http://127.0.0.1:3000/login >/dev/null 2>&1; then
+  pnpm --filter dashboard start > /tmp/sendro-dashboard.log 2>&1 &
+  DASHBOARD_PID=$!
+fi
 
 for _ in {1..30}; do
   if curl -fsS http://127.0.0.1:3001/health >/dev/null 2>&1; then
@@ -84,8 +89,21 @@ for _ in {1..30}; do
   sleep 1
 done
 
+if ! curl -fsS http://127.0.0.1:3001/health >/dev/null 2>&1; then
+  echo "api_unavailable:http://127.0.0.1:3001/health" >&2
+  exit 1
+fi
+
+if ! curl -fsS http://127.0.0.1:3000/login >/dev/null 2>&1; then
+  echo "dashboard_unavailable:http://127.0.0.1:3000/login" >&2
+  exit 1
+fi
+
 VERIFY_OUTPUT="$(pnpm tsx scripts/verify-auth-flow.ts)"
 printf '%s\n' "$VERIFY_OUTPUT"
+
+S02_OUTPUT="$(pnpm tsx scripts/verify-s02-bonds.ts)"
+printf '%s\n' "$S02_OUTPUT"
 
 ROLE_OUTPUT="$(node <<'NODE'
 const email = `company.${Date.now()}@sendro.test`;

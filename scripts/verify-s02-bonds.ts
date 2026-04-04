@@ -49,20 +49,45 @@ const register = async (baseUrl: string, payload: Record<string, unknown>): Prom
   return { cookie };
 };
 
+const withTimeout = async (label: string, endpoint: string, request: Promise<Response>, timeoutMs = 10000) => {
+  const timeout = new Promise<Response>((_, reject) => {
+    const timer = setTimeout(() => {
+      clearTimeout(timer);
+      reject(new Error(JSON.stringify({ phase: label, ok: false, endpoint, timeoutMs, error: "timeout" })));
+    }, timeoutMs);
+  });
+
+  return Promise.race([request, timeout]);
+};
+
+const readJson = async (label: string, response: Response) => {
+  try {
+    return (await response.json()) as TrpcEnvelope;
+  } catch {
+    fail(label, {
+      endpoint: response.url,
+      status: response.status,
+      error: "malformed_json"
+    });
+  }
+};
+
 const getTrpc = async (baseUrl: string, path: string, cookie: string, input?: unknown) => {
   const query = input === undefined ? "" : `?input=${encodeURIComponent(JSON.stringify(input))}`;
-  const response = await fetch(`${baseUrl}/trpc/${path}${query}`, {
+  const endpoint = `${baseUrl}/trpc/${path}${query}`;
+  const response = await withTimeout(`timeout:${path}`, endpoint, fetch(endpoint, {
     headers: {
       cookie,
       origin
     }
-  });
-  const body = (await response.json()) as TrpcEnvelope;
-  return { response, body };
+  }));
+  const body = await readJson(`malformed:${path}`, response);
+  return { response, body, endpoint };
 };
 
 const postTrpc = async (baseUrl: string, path: string, cookie: string, input: unknown) => {
-  const response = await fetch(`${baseUrl}/trpc/${path}`, {
+  const endpoint = `${baseUrl}/trpc/${path}`;
+  const response = await withTimeout(`timeout:${path}`, endpoint, fetch(endpoint, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -70,9 +95,9 @@ const postTrpc = async (baseUrl: string, path: string, cookie: string, input: un
       origin
     },
     body: JSON.stringify(input)
-  });
-  const body = (await response.json()) as TrpcEnvelope;
-  return { response, body };
+  }));
+  const body = await readJson(`malformed:${path}`, response);
+  return { response, body, endpoint };
 };
 
 const closeDashboard = async () =>
