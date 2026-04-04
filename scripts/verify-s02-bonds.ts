@@ -112,10 +112,24 @@ const closeDashboard = async () =>
     });
   });
 
+const canReuseDashboard = async () => {
+  try {
+    const response = await fetch("http://127.0.0.1:3000/login", {
+      headers: { origin }
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+};
+
 const main = async () => {
   const app = await buildApp();
   await app.listen({ port: 3001, host: "127.0.0.1" });
-  await startDashboard();
+  const dashboardOwnedByVerifier = !(await canReuseDashboard());
+  if (dashboardOwnedByVerifier) {
+    await startDashboard();
+  }
   const baseUrl = "http://127.0.0.1:3001";
 
   try {
@@ -297,7 +311,9 @@ const main = async () => {
     }
     phase("gate-revoked", { status: gateAfterRevoke.response.status, message: trpcErrorMessage(gateAfterRevoke.body) });
   } finally {
-    await closeDashboard();
+    if (dashboardOwnedByVerifier) {
+      await closeDashboard();
+    }
     await app.close();
   }
 };
