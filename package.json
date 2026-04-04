@@ -1,0 +1,25 @@
+{
+  "name": "sendro",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.6.2",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:workspace": "vitest run tests/smoke/workspace.test.ts",
+    "verify:s01": "bash scripts/verify-s01.sh",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.6",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
