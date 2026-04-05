@@ -105,6 +105,12 @@ printf '%s\n' "$VERIFY_OUTPUT"
 S02_OUTPUT="$(pnpm tsx scripts/verify-s02-bonds.ts)"
 printf '%s\n' "$S02_OUTPUT"
 
+S03_OUTPUT="$(pnpm tsx scripts/verify-s03-invitations.ts)"
+printf '%s\n' "$S03_OUTPUT"
+
+S04_OUTPUT="$(pnpm tsx scripts/verify-s04-deliveries.ts)"
+printf '%s\n' "$S04_OUTPUT"
+
 ROLE_OUTPUT="$(node <<'NODE'
 const email = `company.${Date.now()}@sendro.test`;
 const params = new URLSearchParams({
