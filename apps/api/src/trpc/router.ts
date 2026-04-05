@@ -4,13 +4,19 @@ import {
   bondDecisionSchema,
   companyBondListsSchema,
   companyInvitationListSchema,
+  createDeliverySchema,
   createInvitationSchema,
+  deliveryDetailSchema,
+  deliveryListSchema,
+  getDeliveryDetailSchema,
   lookupInvitationResultSchema,
   redeemInvitationResultSchema,
   redeemInvitationSchema,
   retailerBondRequestSchema,
   retailerCompanyBondGateResultSchema,
-  retailerCompanyBondGateSchema
+  retailerCompanyBondGateSchema,
+  transitionDeliverySchema,
+  listDeliveriesSchema
 } from "@repo/shared";
 import { ensureProfileForUser } from "../routes/auth/register";
 import {
@@ -19,6 +25,7 @@ import {
   listCompanyBondLists,
   requestRetailerBond
 } from "../lib/bonds";
+import { createDelivery, getDeliveryDetail, listDeliveries, transitionDelivery } from "../lib/deliveries";
 import {
   createCompanyInvitation,
   listCompanyInvitations,
@@ -86,6 +93,24 @@ export const appRouter = router({
       .input(redeemInvitationSchema)
       .output(lookupInvitationResultSchema)
       .query(async ({ input }) => lookupInvitationByToken(input.token))
+  }),
+  deliveries: router({
+    create: protectedProcedure
+      .input(createDeliverySchema)
+      .output(deliveryDetailSchema)
+      .mutation(async ({ ctx, input }) => createDelivery({ user: ctx.session.user as never, data: input })),
+    list: protectedProcedure
+      .input(listDeliveriesSchema.optional())
+      .output(deliveryListSchema)
+      .query(async ({ ctx, input }) => listDeliveries({ user: ctx.session.user as never, filters: input })),
+    detail: protectedProcedure
+      .input(getDeliveryDetailSchema)
+      .output(deliveryDetailSchema)
+      .query(async ({ ctx, input }) => getDeliveryDetail({ user: ctx.session.user as never, deliveryId: input.deliveryId })),
+    transition: protectedProcedure
+      .input(transitionDeliverySchema)
+      .output(deliveryDetailSchema)
+      .mutation(async ({ ctx, input }) => transitionDelivery({ user: ctx.session.user as never, data: input }))
   })
 });
 

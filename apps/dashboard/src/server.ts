@@ -5,6 +5,7 @@ import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
+import { type CreateDeliveryInput, type TransitionDeliveryInput } from "@repo/shared";
 import {
   getCurrentUser,
   getDashboardCompanyViewModel,
@@ -121,6 +122,30 @@ const renderRegisterError = (
     )}</body></html>`,
     statusCode
   );
+};
+
+const rerenderDashboard = async (
+  response: import("node:http").ServerResponse,
+  cookieHeader: string | null | undefined,
+  options?: Parameters<typeof getDashboardCompanyViewModel>[1]
+) => {
+  const viewModel = await getDashboardCompanyViewModel(cookieHeader ?? null, options);
+
+  if (!viewModel?.user) {
+    sendHtml(
+      response,
+      `<!DOCTYPE html><html><body><main><h1>Dashboard indisponível</h1><p role="alert">SSR session resolved but dashboard data failed before rendering.</p></main></body></html>`,
+      502
+    );
+    return;
+  }
+
+  sendHtml(response, renderDashboardPage(viewModel));
+};
+
+const normalizeMaybeNull = (value: string | undefined) => {
+  const trimmed = String(value ?? "").trim();
+  return trimmed.length > 0 ? trimmed : null;
 };
 
 export const server = createServer(async (request, response) => {
@@ -315,23 +340,56 @@ export const server = createServer(async (request, response) => {
       const form = await parseBody(request);
       const channel = String(form.channel ?? "link") as "whatsapp" | "email" | "link" | "manual";
       const invitedContact = String(form.invitedContact ?? "").trim() || null;
-      const viewModel = await getDashboardCompanyViewModel(request.headers.cookie ?? null, {
+      await rerenderDashboard(response, request.headers.cookie ?? null, {
         createInvitation: {
           channel,
           invitedContact
         }
       });
+      return;
+    }
 
-      if (!viewModel?.user) {
-        sendHtml(
-          response,
-          `<!DOCTYPE html><html><body><main><h1>Dashboard indisponível</h1><p role="alert">SSR session resolved but invitation generation failed before rendering.</p></main></body></html>`,
-          502
-        );
+    if (request.method === "POST" && url.pathname === "/dashboard/deliveries") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
         return;
       }
 
-      sendHtml(response, renderDashboardPage(viewModel));
+      const form = await parseBody(request);
+      const createDeliveryInput: CreateDeliveryInput = {
+        companyId: String(form.companyId ?? "").trim(),
+        externalReference: normalizeMaybeNull(form.externalReference),
+        pickupAddress: normalizeMaybeNull(form.pickupAddress),
+        dropoffAddress: normalizeMaybeNull(form.dropoffAddress),
+        metadata: normalizeMaybeNull(form.notes) ? { notes: normalizeMaybeNull(form.notes) } : undefined
+      };
+
+      await rerenderDashboard(response, request.headers.cookie ?? null, {
+        createDelivery: createDeliveryInput
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/deliveries/transition") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const form = await parseBody(request);
+      const transitionInput: TransitionDeliveryInput = {
+        deliveryId: String(form.deliveryId ?? "").trim(),
+        status: String(form.status ?? "assigned").trim() as TransitionDeliveryInput["status"],
+        metadata: normalizeMaybeNull(form.notes) ? { notes: normalizeMaybeNull(form.notes) } : undefined
+      };
+
+      await rerenderDashboard(response, request.headers.cookie ?? null, {
+        transitionDelivery: transitionInput
+      });
       return;
     }
 
@@ -343,17 +401,7 @@ export const server = createServer(async (request, response) => {
         return;
       }
 
-      const viewModel = await getDashboardCompanyViewModel(request.headers.cookie ?? null);
-      if (!viewModel?.user) {
-        sendHtml(
-          response,
-          `<!DOCTYPE html><html><body><main><h1>Dashboard indisponível</h1><p role="alert">SSR session resolved but tRPC user.me failed.</p></main></body></html>`,
-          502
-        );
-        return;
-      }
-
-      sendHtml(response, renderDashboardPage(viewModel));
+      await rerenderDashboard(response, request.headers.cookie ?? null);
       return;
     }
 

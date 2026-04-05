@@ -50,7 +50,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Este convite é destinado a entregadores.");
   });
 
-  it("renders authenticated company dashboard with separated bond sections and invitations", () => {
+  it("renders authenticated company dashboard with separated bond sections, invitations, queue and timeline", () => {
     const html = renderDashboardPage({
       user: {
         name: "ACME Company",
@@ -136,6 +136,70 @@ describe("dashboard auth pages", () => {
             updatedAt: "2026-01-01T00:00:00.000Z"
           }
         ]
+      },
+      retailerDeliveries: {
+        state: "not-retailer",
+        error: "Somente lojistas podem criar entregas pelo dashboard.",
+        deliveries: []
+      },
+      companyDeliveries: {
+        state: "loaded",
+        transitionFeedback: {
+          kind: "transitioned",
+          deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+          status: "in_transit",
+          message: "Entrega 550e8400-e29b-41d4-a716-446655440100 atualizada para in_transit."
+        },
+        deliveries: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+            companyId: "550e8400-e29b-41d4-a716-446655440000",
+            retailerId: "550e8400-e29b-41d4-a716-446655440002",
+            driverId: "550e8400-e29b-41d4-a716-446655440008",
+            externalReference: "pedido-123",
+            status: "in_transit",
+            pickupAddress: "Rua A, 123",
+            dropoffAddress: "Rua B, 456",
+            metadata: { fragile: true },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T01:00:00.000Z",
+            timeline: [
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440101",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+                status: "created",
+                actorType: "retailer",
+                actorId: "550e8400-e29b-41d4-a716-446655440002",
+                actorLabel: "Loja Centro",
+                sequence: 0,
+                metadata: { source: "dashboard" },
+                createdAt: "2026-01-01T00:00:00.000Z"
+              },
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440102",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+                status: "assigned",
+                actorType: "company",
+                actorId: "550e8400-e29b-41d4-a716-446655440000",
+                actorLabel: "ACME Company",
+                sequence: 1,
+                metadata: { actor: "dispatcher" },
+                createdAt: "2026-01-01T00:20:00.000Z"
+              },
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440103",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+                status: "in_transit",
+                actorType: "company",
+                actorId: "550e8400-e29b-41d4-a716-446655440000",
+                actorLabel: "ACME Company",
+                sequence: 2,
+                metadata: { lane: "east" },
+                createdAt: "2026-01-01T01:00:00.000Z"
+              }
+            ]
+          }
+        ]
       }
     });
 
@@ -145,19 +209,33 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Solicitações pendentes");
     expect(html).toContain("Entregadores vinculados");
     expect(html).toContain("Convites de entregador");
+    expect(html).toContain("Fila operacional da empresa");
+    expect(html).toContain("Criação de entrega pelo lojista");
     expect(html).toContain("Loja Centro");
     expect(html).toContain("Loja Norte");
     expect(html).toContain("Motorista Sul");
     expect(html).toContain('data-testid="bonds-state">loaded');
     expect(html).toContain('data-testid="invitations-state">loaded');
+    expect(html).toContain('data-testid="company-deliveries-state">loaded');
+    expect(html).toContain('data-testid="retailer-deliveries-state">not-retailer');
     expect(html).toContain('data-testid="generate-invitation-button"');
     expect(html).toContain('data-testid="generated-invitation"');
     expect(html).toContain('data-testid="generated-invite-url">http://localhost:3000/invite/generatedtoken123456');
+    expect(html).toContain('data-testid="company-delivery-feedback"');
+    expect(html).toContain('data-testid="company-delivery-feedback-message">Entrega 550e8400-e29b-41d4-a716-446655440100 atualizada para in_transit.');
+    expect(html).toContain('data-testid="company-deliveries-list"');
+    expect(html).toContain('data-testid="delivery-status-current">Em trânsito');
+    expect(html).toContain('data-testid="delivery-transition-form"');
+    expect(html).toContain('data-testid="delivery-transition-submit"');
+    expect(html).toContain('data-testid="delivery-timeline-list"');
+    expect(html).toContain('data-testid="delivery-event-status">Criada');
+    expect(html).toContain('data-testid="delivery-event-status">Em trânsito');
+    expect(html).toContain('data-testid="delivery-event-sequence">2');
     expect(html).toContain("driver@sendro.test");
     expect(html).toContain("cus_123");
   });
 
-  it("renders stable empty states for company bonds and invitations", () => {
+  it("renders stable empty states for company bonds, invitations and company queue", () => {
     const html = renderDashboardPage({
       user: {
         name: "Empty Company",
@@ -182,6 +260,15 @@ describe("dashboard auth pages", () => {
       invitations: {
         state: "empty",
         invitations: []
+      },
+      retailerDeliveries: {
+        state: "not-retailer",
+        error: "Somente lojistas podem criar entregas pelo dashboard.",
+        deliveries: []
+      },
+      companyDeliveries: {
+        state: "empty",
+        deliveries: []
       }
     });
 
@@ -192,9 +279,11 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Nenhum entregador vinculado no momento.");
     expect(html).toContain('data-testid="invitation-list-empty"');
     expect(html).toContain("Nenhum convite gerado no momento.");
+    expect(html).toContain('data-testid="company-deliveries-empty"');
+    expect(html).toContain("Nenhuma entrega está na fila operacional desta empresa.");
   });
 
-  it("renders stable upstream failure copy for bonds and invitations", () => {
+  it("renders stable upstream failure copy for bonds, invitations and company queue", () => {
     const html = renderDashboardPage({
       user: {
         name: "Error Company",
@@ -221,18 +310,115 @@ describe("dashboard auth pages", () => {
         state: "error",
         error: "A sessão foi resolvida, mas os convites não puderam ser carregados. Diagnóstico: trpc_invitations_listCompanyInvitations_failed:500:boom",
         invitations: []
+      },
+      retailerDeliveries: {
+        state: "not-retailer",
+        error: "Somente lojistas podem criar entregas pelo dashboard.",
+        deliveries: []
+      },
+      companyDeliveries: {
+        state: "error",
+        error: "A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada. Diagnóstico: trpc_deliveries_list_failed:500:boom",
+        deliveries: []
       }
     });
 
     expect(html).toContain('role="alert"');
     expect(html).toContain('data-testid="bonds-error"');
     expect(html).toContain('data-testid="invitation-error"');
+    expect(html).toContain('data-testid="company-deliveries-error"');
     expect(html).toContain("A sessão foi resolvida, mas os vínculos da empresa não puderam ser carregados.");
     expect(html).toContain("trpc_bonds_listCompanyBonds_failed:500:boom");
     expect(html).toContain("trpc_invitations_listCompanyInvitations_failed:500:boom");
+    expect(html).toContain("trpc_deliveries_list_failed:500:boom");
   });
 
-  it("renders stable non-company diagnostic copy", () => {
+  it("renders retailer delivery creation surface, feedback and timeline SSR", () => {
+    const html = renderDashboardPage({
+      user: {
+        name: "Retailer User",
+        email: "retailer@sendro.test",
+        role: "retailer"
+      },
+      profile: {
+        id: "550e8400-e29b-41d4-a716-446655440200",
+        name: "Loja Bairro",
+        stripeCustomerId: null
+      },
+      diagnostics: {
+        role: "retailer",
+        profileCreated: true,
+        stripeStage: "created"
+      },
+      bondsState: "not-company",
+      bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+      bonds: {
+        activeRetailers: [],
+        pendingRetailers: [],
+        activeDrivers: []
+      },
+      invitations: {
+        state: "not-company",
+        error: "Somente contas empresa podem gerar e listar convites.",
+        invitations: []
+      },
+      retailerDeliveries: {
+        state: "loaded",
+        createFeedback: {
+          kind: "created",
+          deliveryId: "550e8400-e29b-41d4-a716-446655440201",
+          status: "created",
+          message: "Entrega 550e8400-e29b-41d4-a716-446655440201 criada com status created."
+        },
+        deliveries: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440201",
+            companyId: "550e8400-e29b-41d4-a716-446655440202",
+            retailerId: "550e8400-e29b-41d4-a716-446655440200",
+            driverId: null,
+            externalReference: "pedido-rt-1",
+            status: "created",
+            pickupAddress: "Rua Loja, 10",
+            dropoffAddress: "Rua Cliente, 99",
+            metadata: { notes: "deixar na portaria" },
+            createdAt: "2026-01-02T00:00:00.000Z",
+            updatedAt: "2026-01-02T00:00:00.000Z",
+            timeline: [
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440203",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440201",
+                status: "created",
+                actorType: "retailer",
+                actorId: "550e8400-e29b-41d4-a716-446655440200",
+                actorLabel: "Loja Bairro",
+                sequence: 0,
+                metadata: { notes: "deixar na portaria" },
+                createdAt: "2026-01-02T00:00:00.000Z"
+              }
+            ]
+          }
+        ]
+      },
+      companyDeliveries: {
+        state: "not-company",
+        error: "Somente contas empresa visualizam a fila operacional de entregas.",
+        deliveries: []
+      }
+    });
+
+    expect(html).toContain('data-testid="retailer-deliveries-state">loaded');
+    expect(html).toContain('data-testid="retailer-delivery-feedback"');
+    expect(html).toContain('data-testid="retailer-delivery-feedback-message">Entrega 550e8400-e29b-41d4-a716-446655440201 criada com status created.');
+    expect(html).toContain('data-testid="delivery-create-submit"');
+    expect(html).toContain('data-testid="delivery-company-id-input"');
+    expect(html).toContain('data-testid="retailer-deliveries-list"');
+    expect(html).toContain('data-testid="delivery-status-current">Criada');
+    expect(html).toContain('data-testid="delivery-timeline-list"');
+    expect(html).toContain('data-testid="delivery-event-status">Criada');
+    expect(html).toContain("deixar na portaria");
+  });
+
+  it("renders deterministic retailer bond-gate and non-company diagnostics", () => {
     const html = renderDashboardPage({
       user: {
         name: "Retailer User",
@@ -259,13 +445,27 @@ describe("dashboard auth pages", () => {
         state: "not-company",
         error: "Somente contas empresa podem gerar e listar convites.",
         invitations: []
+      },
+      retailerDeliveries: {
+        state: "error",
+        error: "A sessão foi resolvida, mas as entregas do lojista não puderam ser carregadas. Diagnóstico: bond_active_required:retailer_company",
+        deliveries: []
+      },
+      companyDeliveries: {
+        state: "not-company",
+        error: "Somente contas empresa visualizam a fila operacional de entregas.",
+        deliveries: []
       }
     });
 
     expect(html).toContain('data-testid="bonds-not-company"');
     expect(html).toContain('data-testid="invitation-not-company"');
+    expect(html).toContain('data-testid="retailer-deliveries-error"');
+    expect(html).toContain('data-testid="company-deliveries-not-company"');
     expect(html).toContain("Somente contas empresa visualizam vínculos da empresa no dashboard.");
     expect(html).toContain("Somente contas empresa podem gerar e listar convites.");
+    expect(html).toContain("bond_active_required:retailer_company");
+    expect(html).toContain("Somente contas empresa visualizam a fila operacional de entregas.");
   });
 
   it("marks dashboard as a protected path", () => {

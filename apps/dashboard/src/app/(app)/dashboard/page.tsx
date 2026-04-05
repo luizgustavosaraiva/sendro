@@ -21,6 +21,25 @@ const formatDate = (value: string | null | undefined) => {
   return date.toISOString();
 };
 
+const statusCopy: Record<string, string> = {
+  created: "Criada",
+  queued: "Na fila",
+  offered: "Ofertada",
+  assigned: "Atribuída",
+  accepted: "Aceita",
+  picked_up: "Coletada",
+  in_transit: "Em trânsito",
+  delivered: "Entregue",
+  cancelled: "Cancelada",
+  failed_attempt: "Tentativa falhou"
+};
+
+const transitionOptions = [
+  { value: "assigned", label: "Atribuir" },
+  { value: "picked_up", label: "Coletar" },
+  { value: "in_transit", label: "Marcar em trânsito" }
+] as const;
+
 const renderBondItems = (
   items: Array<{
     bondId: string;
@@ -76,6 +95,95 @@ const renderInvitationItems = (
     .join("")}</ul>`;
 };
 
+const renderTimeline = (timeline: Array<{
+  eventId: string;
+  status: string;
+  actorType: string;
+  actorLabel: string | null;
+  sequence: number;
+  createdAt: string;
+  metadata: Record<string, unknown>;
+}>) => {
+  if (timeline.length === 0) {
+    return '<p data-testid="delivery-timeline-empty">Nenhum evento registrado para esta entrega.</p>';
+  }
+
+  return `<ol data-testid="delivery-timeline-list">${timeline
+    .map(
+      (event) => `<li data-testid="delivery-event-${escapeHtml(event.eventId)}">
+        <div><strong data-testid="delivery-event-status">${escapeHtml(statusCopy[event.status] ?? event.status)}</strong></div>
+        <div>sequence: <code data-testid="delivery-event-sequence">${event.sequence}</code></div>
+        <div>ator: <code data-testid="delivery-event-actor">${escapeHtml(event.actorLabel ?? event.actorType)}</code></div>
+        <div>timestamp: <code data-testid="delivery-event-created-at">${escapeHtml(formatDate(event.createdAt))}</code></div>
+        <div>metadata: <code>${escapeHtml(JSON.stringify(event.metadata))}</code></div>
+      </li>`
+    )
+    .join("")}</ol>`;
+};
+
+const renderDeliveryList = (
+  items: DashboardCompanyViewModel["companyDeliveries"]["deliveries"] | DashboardCompanyViewModel["retailerDeliveries"]["deliveries"],
+  mode: "company" | "retailer"
+) => {
+  if (items.length === 0) {
+    return `<p data-testid="${mode}-deliveries-empty">${escapeHtml(
+      mode === "company"
+        ? "Nenhuma entrega está na fila operacional desta empresa."
+        : "Nenhuma entrega criada por este lojista até agora."
+    )}</p>`;
+  }
+
+  return `<ul data-testid="${mode}-deliveries-list">${items
+    .map(
+      (delivery) => `<li data-testid="delivery-item-${escapeHtml(delivery.deliveryId)}">
+        <article class="delivery-card-inner">
+          <header class="delivery-header">
+            <div>
+              <strong data-testid="delivery-reference">${escapeHtml(delivery.externalReference ?? delivery.deliveryId)}</strong>
+              <div>deliveryId: <code>${escapeHtml(delivery.deliveryId)}</code></div>
+            </div>
+            <div>
+              <span data-testid="delivery-status-current">${escapeHtml(statusCopy[delivery.status] ?? delivery.status)}</span>
+              <div><code>${escapeHtml(delivery.status)}</code></div>
+            </div>
+          </header>
+          <div class="delivery-meta-grid">
+            <div>companyId: <code>${escapeHtml(delivery.companyId)}</code></div>
+            <div>retailerId: <code>${escapeHtml(delivery.retailerId)}</code></div>
+            <div>driverId: <code>${escapeHtml(delivery.driverId ?? "n/a")}</code></div>
+            <div>pickup: <code>${escapeHtml(delivery.pickupAddress ?? "n/a")}</code></div>
+            <div>dropoff: <code>${escapeHtml(delivery.dropoffAddress ?? "n/a")}</code></div>
+            <div>createdAt: <code>${escapeHtml(formatDate(delivery.createdAt))}</code></div>
+          </div>
+          <div>metadata: <code>${escapeHtml(JSON.stringify(delivery.metadata))}</code></div>
+          ${mode === "company"
+            ? `<form method="post" action="/dashboard/deliveries/transition" class="delivery-transition-form" data-testid="delivery-transition-form">
+                <input type="hidden" name="deliveryId" value="${escapeHtml(delivery.deliveryId)}" />
+                <label>Próximo status
+                  <select name="status" data-testid="delivery-transition-select">
+                    ${transitionOptions
+                      .map(
+                        (option) => `<option value="${option.value}"${option.value === delivery.status ? " selected" : ""}>${escapeHtml(option.label)}</option>`
+                      )
+                      .join("")}
+                  </select>
+                </label>
+                <label>Notas da transição (opcional)
+                  <input name="notes" placeholder="motivo ou contexto" data-testid="delivery-transition-notes" />
+                </label>
+                <button type="submit" data-testid="delivery-transition-submit">Atualizar entrega</button>
+              </form>`
+            : ""}
+          <section class="timeline-card">
+            <h4>Timeline</h4>
+            ${renderTimeline(delivery.timeline)}
+          </section>
+        </article>
+      </li>`
+    )
+    .join("")}</ul>`;
+};
+
 export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!DOCTYPE html>
 <html lang="pt-BR">
   <head>
@@ -84,21 +192,24 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
     <title>Dashboard Sendro</title>
     <style>
       body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
-      main { max-width: 960px; margin: 48px auto; padding: 32px; }
+      main { max-width: 1100px; margin: 48px auto; padding: 32px; }
       .card { background: rgba(15,23,42,.85); border: 1px solid #334155; border-radius: 16px; padding: 24px; margin-bottom: 16px; }
       .meta { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 12px; }
-      .bond-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 16px; }
-      .bond-section { border: 1px solid #334155; border-radius: 12px; padding: 16px; background: rgba(2,6,23,.55); }
+      .bond-grid, .delivery-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 16px; }
+      .bond-section, .delivery-section, .timeline-card { border: 1px solid #334155; border-radius: 12px; padding: 16px; background: rgba(2,6,23,.55); }
       .status-error { border-color: #ef4444; }
       .status-empty { border-color: #f59e0b; }
-      .invite-form { display: grid; gap: 12px; margin-bottom: 16px; }
-      .invite-form-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
+      .invite-form, .delivery-form, .delivery-transition-form { display: grid; gap: 12px; margin-bottom: 16px; }
+      .invite-form-row, .delivery-form-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
       label { display: grid; gap: 6px; }
       input, select, button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #020617; color: #e2e8f0; }
       button { cursor: pointer; background: #2563eb; border-color: #2563eb; }
-      .invite-generated { margin-bottom: 16px; padding: 16px; border-radius: 12px; background: rgba(37,99,235,.12); border: 1px solid #2563eb; }
+      .invite-generated, .delivery-feedback { margin-bottom: 16px; padding: 16px; border-radius: 12px; background: rgba(37,99,235,.12); border: 1px solid #2563eb; }
+      .delivery-card-inner { display: grid; gap: 16px; }
+      .delivery-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+      .delivery-meta-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: 10px; }
       code { background: #020617; padding: 2px 6px; border-radius: 6px; }
-      ul { padding-left: 20px; }
+      ul, ol { padding-left: 20px; }
       li + li { margin-top: 12px; }
     </style>
   </head>
@@ -123,7 +234,46 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
           <li>stripeCustomerId: <code>${escapeHtml(viewModel.profile?.stripeCustomerId ?? "none")}</code></li>
           <li>bondsState: <code data-testid="bonds-state">${escapeHtml(viewModel.bondsState)}</code></li>
           <li>invitationsState: <code data-testid="invitations-state">${escapeHtml(viewModel.invitations.state)}</code></li>
+          <li>retailerDeliveriesState: <code data-testid="retailer-deliveries-state">${escapeHtml(viewModel.retailerDeliveries.state)}</code></li>
+          <li>companyDeliveriesState: <code data-testid="company-deliveries-state">${escapeHtml(viewModel.companyDeliveries.state)}</code></li>
         </ul>
+      </section>
+      <section class="card ${viewModel.retailerDeliveries.state === "error" ? "status-error" : viewModel.retailerDeliveries.state === "empty" ? "status-empty" : ""}">
+        <h2>Criação de entrega pelo lojista</h2>
+        <p>Crie entregas pelo SSR do dashboard sem depender de fetch client-side.</p>
+        ${viewModel.retailerDeliveries.error ? `<p role="alert" data-testid="retailer-deliveries-error">${escapeHtml(viewModel.retailerDeliveries.error)}</p>` : ""}
+        ${viewModel.retailerDeliveries.createFeedback
+          ? `<div class="delivery-feedback" data-testid="retailer-delivery-feedback">
+              <strong>Entrega criada com sucesso</strong>
+              <div data-testid="retailer-delivery-feedback-message">${escapeHtml(viewModel.retailerDeliveries.createFeedback.message)}</div>
+              <div>deliveryId: <code>${escapeHtml(viewModel.retailerDeliveries.createFeedback.deliveryId)}</code></div>
+              <div>status: <code>${escapeHtml(viewModel.retailerDeliveries.createFeedback.status)}</code></div>
+            </div>`
+          : ""}
+        ${viewModel.retailerDeliveries.state === "not-retailer" ? '<p data-testid="retailer-deliveries-not-retailer">Somente lojistas podem criar entregas pelo dashboard.</p>' : ""}
+        <form class="delivery-form" method="post" action="/dashboard/deliveries">
+          <div class="delivery-form-row">
+            <label>Company ID
+              <input name="companyId" placeholder="UUID da empresa vinculada" data-testid="delivery-company-id-input" />
+            </label>
+            <label>Referência externa
+              <input name="externalReference" placeholder="pedido-123" data-testid="delivery-reference-input" />
+            </label>
+          </div>
+          <div class="delivery-form-row">
+            <label>Endereço de coleta
+              <input name="pickupAddress" placeholder="Rua da coleta, 123" data-testid="delivery-pickup-input" />
+            </label>
+            <label>Endereço de entrega
+              <input name="dropoffAddress" placeholder="Rua do destino, 456" data-testid="delivery-dropoff-input" />
+            </label>
+          </div>
+          <label>Notas operacionais
+            <input name="notes" placeholder="detalhes do pacote ou observações" data-testid="delivery-notes-input" />
+          </label>
+          <button type="submit" data-testid="delivery-create-submit">Criar entrega</button>
+        </form>
+        ${renderDeliveryList(viewModel.retailerDeliveries.deliveries, "retailer")}
       </section>
       <section class="card ${viewModel.invitations.state === "error" ? "status-error" : viewModel.invitations.state === "empty" ? "status-empty" : ""}">
         <h2>Convites de entregador</h2>
@@ -155,6 +305,21 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
           <button type="submit" data-testid="generate-invitation-button">Gerar link de convite</button>
         </form>
         ${renderInvitationItems(viewModel.invitations.invitations, "Nenhum convite gerado no momento.")}
+      </section>
+      <section class="card ${viewModel.companyDeliveries.state === "error" ? "status-error" : viewModel.companyDeliveries.state === "empty" ? "status-empty" : ""}">
+        <h2>Fila operacional da empresa</h2>
+        <p>Acompanhe a fila SSR, o status atual e a timeline imutável de cada entrega.</p>
+        ${viewModel.companyDeliveries.error ? `<p role="alert" data-testid="company-deliveries-error">${escapeHtml(viewModel.companyDeliveries.error)}</p>` : ""}
+        ${viewModel.companyDeliveries.transitionFeedback
+          ? `<div class="delivery-feedback" data-testid="company-delivery-feedback">
+              <strong>Entrega atualizada com sucesso</strong>
+              <div data-testid="company-delivery-feedback-message">${escapeHtml(viewModel.companyDeliveries.transitionFeedback.message)}</div>
+              <div>deliveryId: <code>${escapeHtml(viewModel.companyDeliveries.transitionFeedback.deliveryId)}</code></div>
+              <div>status: <code>${escapeHtml(viewModel.companyDeliveries.transitionFeedback.status)}</code></div>
+            </div>`
+          : ""}
+        ${viewModel.companyDeliveries.state === "not-company" ? '<p data-testid="company-deliveries-not-company">Somente contas empresa visualizam a fila operacional de entregas.</p>' : ""}
+        ${renderDeliveryList(viewModel.companyDeliveries.deliveries, "company")}
       </section>
       <section class="card ${viewModel.bondsState === "error" ? "status-error" : viewModel.bondsState === "empty" ? "status-empty" : ""}">
         <h2>Vínculos da empresa</h2>

@@ -2,8 +2,17 @@ import { z } from "zod";
 import {
   companyBondListsSchema,
   companyInvitationListSchema,
+  createDeliverySchema,
+  deliveryDetailSchema,
+  deliveryListSchema,
   lookupInvitationResultSchema,
-  redeemInvitationResultSchema
+  redeemInvitationResultSchema,
+  transitionDeliverySchema,
+  type CreateDeliveryInput,
+  type DeliveryDetail,
+  type DeliveryListItem,
+  type DeliveryStatus,
+  type TransitionDeliveryInput
 } from "@repo/shared";
 import { buildApiUrl } from "./auth";
 import { env } from "./env";
@@ -62,6 +71,13 @@ export type CompanyInvitationListItem = z.infer<typeof invitationCreateResultSch
 export type PublicInvitationLookup = z.infer<typeof lookupInvitationResultSchema>;
 export type InvitationRedeemResult = z.infer<typeof redeemInvitationResultSchema>;
 
+type DashboardDeliveryMutationFeedback = {
+  kind: "created" | "transitioned";
+  deliveryId: string;
+  status: DeliveryStatus;
+  message: string;
+};
+
 export type DashboardCompanyInvitationViewModel = {
   invitations: CompanyInvitationListItem[];
   state: "loaded" | "empty" | "error" | "not-company";
@@ -73,6 +89,20 @@ export type DashboardCompanyInvitationViewModel = {
   };
 };
 
+export type DashboardRetailerDeliveriesViewModel = {
+  state: "loaded" | "empty" | "error" | "not-retailer";
+  deliveries: DeliveryListItem[];
+  error?: string;
+  createFeedback?: DashboardDeliveryMutationFeedback;
+};
+
+export type DashboardCompanyDeliveriesViewModel = {
+  state: "loaded" | "empty" | "error" | "not-company";
+  deliveries: DeliveryListItem[];
+  error?: string;
+  transitionFeedback?: DashboardDeliveryMutationFeedback;
+};
+
 export type DashboardCompanyViewModel = {
   user: CurrentUser["user"];
   profile?: CurrentUser["profile"];
@@ -81,6 +111,8 @@ export type DashboardCompanyViewModel = {
   bondsState: "loaded" | "empty" | "error" | "not-company";
   bondsError?: string;
   invitations: DashboardCompanyInvitationViewModel;
+  retailerDeliveries: DashboardRetailerDeliveriesViewModel;
+  companyDeliveries: DashboardCompanyDeliveriesViewModel;
 };
 
 const defaultBondLists = (): CompanyBondLists => ({
@@ -91,6 +123,16 @@ const defaultBondLists = (): CompanyBondLists => ({
 
 const defaultInvitationViewModel = (): DashboardCompanyInvitationViewModel => ({
   invitations: [],
+  state: "empty"
+});
+
+const defaultRetailerDeliveriesViewModel = (): DashboardRetailerDeliveriesViewModel => ({
+  deliveries: [],
+  state: "empty"
+});
+
+const defaultCompanyDeliveriesViewModel = (): DashboardCompanyDeliveriesViewModel => ({
+  deliveries: [],
   state: "empty"
 });
 
@@ -108,8 +150,13 @@ const parseTrpcPayload = async (response: Response) => {
     : envelope.result?.data ?? json;
 };
 
-const fetchTrpc = async <T>(path: string, schema: z.ZodSchema<T>, cookieHeader?: string | null) => {
-  const response = await fetch(buildApiUrl(`/trpc/${path}`), {
+const fetchTrpc = async <T>(path: string, schema: z.ZodSchema<T>, cookieHeader?: string | null, input?: unknown) => {
+  const requestUrl = new URL(buildApiUrl(`/trpc/${path}`));
+  if (typeof input !== "undefined") {
+    requestUrl.searchParams.set("input", JSON.stringify(input));
+  }
+
+  const response = await fetch(requestUrl, {
     headers: {
       ...(cookieHeader ? { cookie: cookieHeader } : {}),
       origin: env.appUrl
@@ -175,6 +222,28 @@ export const getCompanyBondLists = async (cookieHeader?: string | null) => {
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const getDeliveries = async (cookieHeader?: string | null, input?: { status?: DeliveryStatus }) => {
+  const result = await fetchTrpc("deliveries.list", deliveryListSchema, cookieHeader, input && Object.keys(input).length > 0 ? input : undefined);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const getDeliveryDetail = async (deliveryId: string, cookieHeader?: string | null) => {
+  const result = await fetchTrpc("deliveries.detail", deliveryDetailSchema, cookieHeader, { deliveryId });
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const createRetailerDelivery = async (input: CreateDeliveryInput, cookieHeader?: string | null) => {
+  const parsedInput = createDeliverySchema.parse(input);
+  const result = await postTrpc("deliveries.create", parsedInput, deliveryDetailSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const transitionCompanyDelivery = async (input: TransitionDeliveryInput, cookieHeader?: string | null) => {
+  const parsedInput = transitionDeliverySchema.parse(input);
+  const result = await postTrpc("deliveries.transition", parsedInput, deliveryDetailSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 export const lookupInvitationByToken = async (token: string) => {
   const response = await fetch(buildApiUrl(`/api/invitations/${encodeURIComponent(token)}`), {
     headers: {
@@ -210,6 +279,8 @@ export const getDashboardCompanyViewModel = async (
       channel: "whatsapp" | "email" | "link" | "manual";
       invitedContact?: string | null;
     } | null;
+    createDelivery?: CreateDeliveryInput | null;
+    transitionDelivery?: TransitionDeliveryInput | null;
   }
 ): Promise<DashboardCompanyViewModel | null> => {
   const currentUser = await getCurrentUser(cookieHeader);
@@ -218,7 +289,83 @@ export const getDashboardCompanyViewModel = async (
     return null;
   }
 
-  if (currentUser.user.role !== "company") {
+  const isCompany = currentUser.user.role === "company";
+  const isRetailer = currentUser.user.role === "retailer";
+
+  if (!isCompany) {
+    if (!isRetailer) {
+      return {
+        user: currentUser.user,
+        profile: currentUser.profile,
+        diagnostics: currentUser.diagnostics,
+        bonds: defaultBondLists(),
+        bondsState: "not-company",
+        bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+        invitations: {
+          invitations: [],
+          state: "not-company",
+          error: "Somente contas empresa podem gerar e listar convites."
+        },
+        retailerDeliveries: {
+          deliveries: [],
+          state: "not-retailer",
+          error: "Somente lojistas podem criar entregas pelo dashboard."
+        },
+        companyDeliveries: {
+          deliveries: [],
+          state: "not-company",
+          error: "Somente contas empresa visualizam a fila operacional de entregas."
+        }
+      };
+    }
+
+    let retailerDeliveries = defaultRetailerDeliveriesViewModel();
+
+    try {
+      let createFeedback: DashboardRetailerDeliveriesViewModel["createFeedback"];
+      if (options?.createDelivery) {
+        const created = await createRetailerDelivery(options.createDelivery, cookieHeader);
+        if (!created) {
+          retailerDeliveries = {
+            deliveries: [],
+            state: "error",
+            error: "A sessão foi resolvida, mas a entrega não pôde ser criada porque a autenticação SSR não foi aceita pela API."
+          };
+        } else {
+          createFeedback = {
+            kind: "created",
+            deliveryId: created.deliveryId,
+            status: created.status,
+            message: `Entrega ${created.deliveryId} criada com status ${created.status}.`
+          };
+        }
+      }
+
+      if (retailerDeliveries.state !== "error") {
+        const rows = await getDeliveries(cookieHeader);
+        if (!rows) {
+          retailerDeliveries = {
+            deliveries: [],
+            state: "error",
+            error: "A sessão foi resolvida, mas as entregas do lojista não puderam ser carregadas."
+          };
+        } else {
+          retailerDeliveries = {
+            deliveries: rows,
+            state: rows.length > 0 ? "loaded" : "empty",
+            createFeedback
+          };
+        }
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown_delivery_load_error";
+      retailerDeliveries = {
+        deliveries: [],
+        state: "error",
+        error: `A sessão foi resolvida, mas as entregas do lojista não puderam ser carregadas. Diagnóstico: ${detail}`
+      };
+    }
+
     return {
       user: currentUser.user,
       profile: currentUser.profile,
@@ -230,6 +377,12 @@ export const getDashboardCompanyViewModel = async (
         invitations: [],
         state: "not-company",
         error: "Somente contas empresa podem gerar e listar convites."
+      },
+      retailerDeliveries,
+      companyDeliveries: {
+        deliveries: [],
+        state: "not-company",
+        error: "Somente contas empresa visualizam a fila operacional de entregas."
       }
     };
   }
@@ -275,19 +428,21 @@ export const getDashboardCompanyViewModel = async (
       }
     }
 
-    const rows = await listCompanyInvitations(cookieHeader);
-    if (!rows) {
-      invitations = {
-        invitations: [],
-        state: "error",
-        error: "A sessão foi resolvida, mas a lista de convites não pôde ser carregada."
-      };
-    } else {
-      invitations = {
-        invitations: rows,
-        state: rows.length > 0 ? "loaded" : "empty",
-        generatedInvitation
-      };
+    if (invitations.state !== "error") {
+      const rows = await listCompanyInvitations(cookieHeader);
+      if (!rows) {
+        invitations = {
+          invitations: [],
+          state: "error",
+          error: "A sessão foi resolvida, mas a lista de convites não pôde ser carregada."
+        };
+      } else {
+        invitations = {
+          invitations: rows,
+          state: rows.length > 0 ? "loaded" : "empty",
+          generatedInvitation
+        };
+      }
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown_invitation_load_error";
@@ -298,6 +453,59 @@ export const getDashboardCompanyViewModel = async (
     };
   }
 
+  let companyDeliveries = defaultCompanyDeliveriesViewModel();
+
+  try {
+    let transitionFeedback: DashboardCompanyDeliveriesViewModel["transitionFeedback"];
+    let transitionedDetail: DeliveryDetail | undefined;
+
+    if (options?.transitionDelivery) {
+      const transitioned = await transitionCompanyDelivery(options.transitionDelivery, cookieHeader);
+      if (!transitioned) {
+        companyDeliveries = {
+          deliveries: [],
+          state: "error",
+          error: "A sessão foi resolvida, mas a transição da entrega não pôde ser executada porque a autenticação SSR não foi aceita pela API."
+        };
+      } else {
+        transitionedDetail = transitioned;
+        transitionFeedback = {
+          kind: "transitioned",
+          deliveryId: transitioned.deliveryId,
+          status: transitioned.status,
+          message: `Entrega ${transitioned.deliveryId} atualizada para ${transitioned.status}.`
+        };
+      }
+    }
+
+    if (companyDeliveries.state !== "error") {
+      const rows = await getDeliveries(cookieHeader);
+      if (!rows) {
+        companyDeliveries = {
+          deliveries: [],
+          state: "error",
+          error: "A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada."
+        };
+      } else {
+        const mergedRows = transitionedDetail
+          ? rows.map((row) => (row.deliveryId === transitionedDetail.deliveryId ? transitionedDetail : row))
+          : rows;
+        companyDeliveries = {
+          deliveries: mergedRows,
+          state: mergedRows.length > 0 ? "loaded" : "empty",
+          transitionFeedback
+        };
+      }
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "unknown_company_delivery_load_error";
+    companyDeliveries = {
+      deliveries: [],
+      state: "error",
+      error: `A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada. Diagnóstico: ${detail}`
+    };
+  }
+
   return {
     user: currentUser.user,
     profile: currentUser.profile,
@@ -305,6 +513,12 @@ export const getDashboardCompanyViewModel = async (
     bonds,
     bondsState,
     bondsError,
-    invitations
+    invitations,
+    retailerDeliveries: {
+      deliveries: [],
+      state: "not-retailer",
+      error: "Somente lojistas podem criar entregas pelo dashboard."
+    },
+    companyDeliveries
   };
 };
