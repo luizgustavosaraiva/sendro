@@ -34,6 +34,11 @@ const statusCopy: Record<string, string> = {
   failed_attempt: "Tentativa falhou"
 };
 
+const waitingReasonCopy: Record<string, string> = {
+  max_private_attempts_reached: "Máximo de tentativas privadas atingido",
+  no_candidates_available: "Nenhum entregador elegível disponível"
+};
+
 const transitionOptions = [
   { value: "assigned", label: "Atribuir" },
   { value: "picked_up", label: "Coletar" },
@@ -121,6 +126,60 @@ const renderTimeline = (timeline: Array<{
     .join("")}</ol>`;
 };
 
+const renderDispatchDiagnostics = (delivery: DashboardCompanyViewModel["companyDeliveries"]["deliveries"][number]) => {
+  if (!delivery.dispatch) {
+    return '<p data-testid="dispatch-diagnostics-empty">Sem estado explícito de dispatch para esta entrega.</p>';
+  }
+
+  const lastAttempt = delivery.dispatch.attempts.at(-1) ?? null;
+  const lastEvent = delivery.timeline.at(-1) ?? null;
+
+  return `<div class="dispatch-diagnostics" data-testid="dispatch-diagnostics">
+    <div>phase: <code data-testid="dispatch-phase">${escapeHtml(delivery.dispatch.phase)}</code></div>
+    <div>attempt ativa: <code data-testid="dispatch-active-attempt">${delivery.dispatch.activeAttemptNumber}</code></div>
+    <div>deadline: <code data-testid="dispatch-deadline">${escapeHtml(formatDate(delivery.dispatch.deadlineAt))}</code></div>
+    <div>waiting reason: <code data-testid="dispatch-waiting-reason">${escapeHtml(delivery.dispatch.waitingReason ? (waitingReasonCopy[delivery.dispatch.waitingReason] ?? delivery.dispatch.waitingReason) : "n/a")}</code></div>
+    <div>última tentativa: <code data-testid="dispatch-last-attempt">${lastAttempt ? `${lastAttempt.attemptNumber}:${lastAttempt.status}` : "n/a"}</code></div>
+    <div>último evento: <code data-testid="dispatch-last-event-at">${escapeHtml(formatDate(lastEvent?.createdAt))}</code></div>
+    <div>snapshot candidatos: <code data-testid="dispatch-snapshot-count">${delivery.dispatch.latestSnapshot.length}</code></div>
+  </div>`;
+};
+
+const renderOperationalQueue = (
+  items: DashboardCompanyViewModel["companyDeliveries"]["activeQueue"],
+  type: "active" | "waiting"
+) => {
+  const emptyTestId = type === "active" ? "dispatch-active-empty" : "dispatch-waiting-empty";
+  const listTestId = type === "active" ? "dispatch-active-list" : "dispatch-waiting-list";
+  const cardTestId = type === "active" ? "dispatch-active-card" : "dispatch-waiting-card";
+
+  if (items.length === 0) {
+    return `<p data-testid="${emptyTestId}">${escapeHtml(
+      type === "active"
+        ? "Nenhuma entrega com oferta ativa no momento."
+        : "Nenhuma entrega em waiting queue no momento."
+    )}</p>`;
+  }
+
+  return `<ul data-testid="${listTestId}">${items
+    .map((delivery) => `<li data-testid="${cardTestId}-${escapeHtml(delivery.deliveryId)}">
+      <article class="delivery-card-inner">
+        <header class="delivery-header">
+          <div>
+            <strong>${escapeHtml(delivery.externalReference ?? delivery.deliveryId)}</strong>
+            <div>deliveryId: <code>${escapeHtml(delivery.deliveryId)}</code></div>
+          </div>
+          <div>
+            <span>${escapeHtml(statusCopy[delivery.status] ?? delivery.status)}</span>
+            <div><code>${escapeHtml(delivery.dispatch?.phase ?? "n/a")}</code></div>
+          </div>
+        </header>
+        ${renderDispatchDiagnostics(delivery)}
+      </article>
+    </li>`)
+    .join("")}</ul>`;
+};
+
 const renderDeliveryList = (
   items: DashboardCompanyViewModel["companyDeliveries"]["deliveries"] | DashboardCompanyViewModel["retailerDeliveries"]["deliveries"],
   mode: "company" | "retailer"
@@ -178,6 +237,7 @@ const renderDeliveryList = (
             <h4>Timeline</h4>
             ${renderTimeline(delivery.timeline)}
           </section>
+          ${mode === "company" ? `<section class="timeline-card"><h4>Diagnóstico de dispatch</h4>${renderDispatchDiagnostics(delivery)}</section>` : ""}
         </article>
       </li>`
     )
@@ -310,6 +370,8 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
         <h2>Fila operacional da empresa</h2>
         <p>Acompanhe a fila SSR, o status atual e a timeline imutável de cada entrega.</p>
         ${viewModel.companyDeliveries.error ? `<p role="alert" data-testid="company-deliveries-error">${escapeHtml(viewModel.companyDeliveries.error)}</p>` : ""}
+        ${viewModel.companyDeliveries.queueError ? `<p role="alert" data-testid="dispatch-active-error">${escapeHtml(viewModel.companyDeliveries.queueError)}</p>` : ""}
+        ${viewModel.companyDeliveries.waitingError ? `<p role="alert" data-testid="dispatch-waiting-error">${escapeHtml(viewModel.companyDeliveries.waitingError)}</p>` : ""}
         ${viewModel.companyDeliveries.transitionFeedback
           ? `<div class="delivery-feedback" data-testid="company-delivery-feedback">
               <strong>Entrega atualizada com sucesso</strong>
@@ -318,7 +380,26 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
               <div>status: <code>${escapeHtml(viewModel.companyDeliveries.transitionFeedback.status)}</code></div>
             </div>`
           : ""}
+        ${viewModel.companyDeliveries.reprocessFeedback
+          ? `<div class="delivery-feedback" data-testid="dispatch-reprocess-feedback">
+              <strong>Dispatch reprocessado</strong>
+              <div data-testid="dispatch-reprocess-message">${escapeHtml(viewModel.companyDeliveries.reprocessFeedback.message)}</div>
+              <div>processedAt: <code>${escapeHtml(formatDate(viewModel.companyDeliveries.reprocessFeedback.result.processedAt))}</code></div>
+            </div>`
+          : ""}
         ${viewModel.companyDeliveries.state === "not-company" ? '<p data-testid="company-deliveries-not-company">Somente contas empresa visualizam a fila operacional de entregas.</p>' : ""}
+        <div class="delivery-grid">
+          <section class="delivery-section">
+            <h3>Fila ativa de dispatch</h3>
+            <p>Entregas com oferta ativa, deadline e tentativa corrente.</p>
+            ${renderOperationalQueue(viewModel.companyDeliveries.activeQueue, "active")}
+          </section>
+          <section class="delivery-section">
+            <h3>Waiting queue</h3>
+            <p>Entregas aguardando intervenção após fallback ou falta de candidatos.</p>
+            ${renderOperationalQueue(viewModel.companyDeliveries.waitingQueue, "waiting")}
+          </section>
+        </div>
         ${renderDeliveryList(viewModel.companyDeliveries.deliveries, "company")}
       </section>
       <section class="card ${viewModel.bondsState === "error" ? "status-error" : viewModel.bondsState === "empty" ? "status-empty" : ""}">

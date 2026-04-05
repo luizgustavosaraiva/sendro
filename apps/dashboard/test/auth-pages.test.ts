@@ -50,7 +50,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Este convite é destinado a entregadores.");
   });
 
-  it("renders authenticated company dashboard with separated bond sections, invitations, queue and timeline", () => {
+  it("renders authenticated company dashboard with separated dispatch surfaces", () => {
     const html = renderDashboardPage({
       user: {
         name: "ACME Company",
@@ -144,6 +144,132 @@ describe("dashboard auth pages", () => {
       },
       companyDeliveries: {
         state: "loaded",
+        activeQueue: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+            companyId: "550e8400-e29b-41d4-a716-446655440000",
+            retailerId: "550e8400-e29b-41d4-a716-446655440002",
+            driverId: "550e8400-e29b-41d4-a716-446655440008",
+            externalReference: "pedido-123",
+            status: "offered",
+            pickupAddress: "Rua A, 123",
+            dropoffAddress: "Rua B, 456",
+            metadata: { fragile: true },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:30:00.000Z",
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655440120",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+              companyId: "550e8400-e29b-41d4-a716-446655440000",
+              phase: "offered",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 2,
+              activeAttemptId: "550e8400-e29b-41d4-a716-446655440121",
+              offeredDriverId: "550e8400-e29b-41d4-a716-446655440008",
+              offeredDriverName: "Motorista Sul",
+              offeredAt: "2026-01-01T00:30:00.000Z",
+              deadlineAt: "2026-01-01T00:32:00.000Z",
+              waitingReason: null,
+              waitingSince: null,
+              rankingVersion: "dispatch-v1",
+              assumptions: ["queue uses active bond creation order until richer driver capacity signals arrive in S02/S03"],
+              latestSnapshot: [],
+              attempts: [
+                {
+                  attemptId: "550e8400-e29b-41d4-a716-446655440121",
+                  deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+                  companyId: "550e8400-e29b-41d4-a716-446655440000",
+                  attemptNumber: 2,
+                  driverId: "550e8400-e29b-41d4-a716-446655440008",
+                  status: "pending",
+                  expiresAt: "2026-01-01T00:32:00.000Z",
+                  resolvedAt: null,
+                  candidateSnapshot: null,
+                  createdAt: "2026-01-01T00:30:00.000Z",
+                  updatedAt: "2026-01-01T00:30:00.000Z"
+                }
+              ],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:30:00.000Z"
+            },
+            timeline: [
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440101",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+                status: "created",
+                actorType: "retailer",
+                actorId: "550e8400-e29b-41d4-a716-446655440002",
+                actorLabel: "Loja Centro",
+                sequence: 1,
+                metadata: { source: "dashboard" },
+                createdAt: "2026-01-01T00:00:00.000Z"
+              }
+            ]
+          }
+        ],
+        waitingQueue: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440130",
+            companyId: "550e8400-e29b-41d4-a716-446655440000",
+            retailerId: "550e8400-e29b-41d4-a716-446655440002",
+            driverId: null,
+            externalReference: "pedido-waiting",
+            status: "queued",
+            pickupAddress: "Rua C, 10",
+            dropoffAddress: "Rua D, 20",
+            metadata: {},
+            createdAt: "2026-01-01T00:10:00.000Z",
+            updatedAt: "2026-01-01T00:40:00.000Z",
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655440131",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440130",
+              companyId: "550e8400-e29b-41d4-a716-446655440000",
+              phase: "waiting",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 2,
+              activeAttemptId: null,
+              offeredDriverId: null,
+              offeredDriverName: null,
+              offeredAt: null,
+              deadlineAt: null,
+              waitingReason: "max_private_attempts_reached",
+              waitingSince: "2026-01-01T00:40:00.000Z",
+              rankingVersion: "dispatch-v1",
+              assumptions: [],
+              latestSnapshot: [],
+              attempts: [
+                {
+                  attemptId: "550e8400-e29b-41d4-a716-446655440132",
+                  deliveryId: "550e8400-e29b-41d4-a716-446655440130",
+                  companyId: "550e8400-e29b-41d4-a716-446655440000",
+                  attemptNumber: 2,
+                  driverId: null,
+                  status: "expired",
+                  expiresAt: "2026-01-01T00:39:00.000Z",
+                  resolvedAt: "2026-01-01T00:40:00.000Z",
+                  candidateSnapshot: null,
+                  createdAt: "2026-01-01T00:37:00.000Z",
+                  updatedAt: "2026-01-01T00:40:00.000Z"
+                }
+              ],
+              createdAt: "2026-01-01T00:10:00.000Z",
+              updatedAt: "2026-01-01T00:40:00.000Z"
+            },
+            timeline: [
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440133",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440130",
+                status: "queued",
+                actorType: "system",
+                actorId: null,
+                actorLabel: "dispatch-engine",
+                sequence: 1,
+                metadata: { reason: "dispatch_waiting_queue" },
+                createdAt: "2026-01-01T00:40:00.000Z"
+              }
+            ]
+          }
+        ],
         transitionFeedback: {
           kind: "transitioned",
           deliveryId: "550e8400-e29b-41d4-a716-446655440100",
@@ -163,6 +289,27 @@ describe("dashboard auth pages", () => {
             metadata: { fragile: true },
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T01:00:00.000Z",
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655440120",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440100",
+              companyId: "550e8400-e29b-41d4-a716-446655440000",
+              phase: "completed",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 2,
+              activeAttemptId: null,
+              offeredDriverId: null,
+              offeredDriverName: null,
+              offeredAt: null,
+              deadlineAt: null,
+              waitingReason: null,
+              waitingSince: null,
+              rankingVersion: "dispatch-v1",
+              assumptions: [],
+              latestSnapshot: [],
+              attempts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T01:00:00.000Z"
+            },
             timeline: [
               {
                 eventId: "550e8400-e29b-41d4-a716-446655440101",
@@ -171,7 +318,7 @@ describe("dashboard auth pages", () => {
                 actorType: "retailer",
                 actorId: "550e8400-e29b-41d4-a716-446655440002",
                 actorLabel: "Loja Centro",
-                sequence: 0,
+                sequence: 1,
                 metadata: { source: "dashboard" },
                 createdAt: "2026-01-01T00:00:00.000Z"
               },
@@ -182,7 +329,7 @@ describe("dashboard auth pages", () => {
                 actorType: "company",
                 actorId: "550e8400-e29b-41d4-a716-446655440000",
                 actorLabel: "ACME Company",
-                sequence: 1,
+                sequence: 2,
                 metadata: { actor: "dispatcher" },
                 createdAt: "2026-01-01T00:20:00.000Z"
               },
@@ -193,7 +340,7 @@ describe("dashboard auth pages", () => {
                 actorType: "company",
                 actorId: "550e8400-e29b-41d4-a716-446655440000",
                 actorLabel: "ACME Company",
-                sequence: 2,
+                sequence: 3,
                 metadata: { lane: "east" },
                 createdAt: "2026-01-01T01:00:00.000Z"
               }
@@ -222,7 +369,10 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="generated-invitation"');
     expect(html).toContain('data-testid="generated-invite-url">http://localhost:3000/invite/generatedtoken123456');
     expect(html).toContain('data-testid="company-delivery-feedback"');
-    expect(html).toContain('data-testid="company-delivery-feedback-message">Entrega 550e8400-e29b-41d4-a716-446655440100 atualizada para in_transit.');
+    expect(html).toContain('data-testid="dispatch-active-list"');
+    expect(html).toContain('data-testid="dispatch-waiting-list"');
+    expect(html).toContain('data-testid="dispatch-phase">offered');
+    expect(html).toContain('data-testid="dispatch-waiting-reason">Máximo de tentativas privadas atingido');
     expect(html).toContain('data-testid="company-deliveries-list"');
     expect(html).toContain('data-testid="delivery-status-current">Em trânsito');
     expect(html).toContain('data-testid="delivery-transition-form"');
@@ -230,7 +380,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="delivery-timeline-list"');
     expect(html).toContain('data-testid="delivery-event-status">Criada');
     expect(html).toContain('data-testid="delivery-event-status">Em trânsito');
-    expect(html).toContain('data-testid="delivery-event-sequence">2');
+    expect(html).toContain('data-testid="delivery-event-sequence">3');
     expect(html).toContain("driver@sendro.test");
     expect(html).toContain("cus_123");
   });
@@ -268,7 +418,9 @@ describe("dashboard auth pages", () => {
       },
       companyDeliveries: {
         state: "empty",
-        deliveries: []
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: []
       }
     });
 
@@ -280,6 +432,8 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="invitation-list-empty"');
     expect(html).toContain("Nenhum convite gerado no momento.");
     expect(html).toContain('data-testid="company-deliveries-empty"');
+    expect(html).toContain('data-testid="dispatch-active-empty"');
+    expect(html).toContain('data-testid="dispatch-waiting-empty"');
     expect(html).toContain("Nenhuma entrega está na fila operacional desta empresa.");
   });
 
@@ -319,7 +473,11 @@ describe("dashboard auth pages", () => {
       companyDeliveries: {
         state: "error",
         error: "A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada. Diagnóstico: trpc_deliveries_list_failed:500:boom",
-        deliveries: []
+        queueError: "dispatch_queue_unavailable",
+        waitingError: "waiting_queue_unavailable",
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: []
       }
     });
 
@@ -327,6 +485,8 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="bonds-error"');
     expect(html).toContain('data-testid="invitation-error"');
     expect(html).toContain('data-testid="company-deliveries-error"');
+    expect(html).toContain('data-testid="dispatch-active-error"');
+    expect(html).toContain('data-testid="dispatch-waiting-error"');
     expect(html).toContain("A sessão foi resolvida, mas os vínculos da empresa não puderam ser carregados.");
     expect(html).toContain("trpc_bonds_listCompanyBonds_failed:500:boom");
     expect(html).toContain("trpc_invitations_listCompanyInvitations_failed:500:boom");
@@ -395,14 +555,17 @@ describe("dashboard auth pages", () => {
                 metadata: { notes: "deixar na portaria" },
                 createdAt: "2026-01-02T00:00:00.000Z"
               }
-            ]
+            ],
+            dispatch: null
           }
         ]
       },
       companyDeliveries: {
         state: "not-company",
         error: "Somente contas empresa visualizam a fila operacional de entregas.",
-        deliveries: []
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: []
       }
     });
 
@@ -454,7 +617,9 @@ describe("dashboard auth pages", () => {
       companyDeliveries: {
         state: "not-company",
         error: "Somente contas empresa visualizam a fila operacional de entregas.",
-        deliveries: []
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: []
       }
     });
 

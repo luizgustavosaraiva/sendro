@@ -5,13 +5,17 @@ import {
   createDeliverySchema,
   deliveryDetailSchema,
   deliveryListSchema,
+  dispatchQueueListSchema,
   lookupInvitationResultSchema,
   redeemInvitationResultSchema,
+  reprocessDispatchTimeoutsResultSchema,
   transitionDeliverySchema,
+  waitingQueueListSchema,
   type CreateDeliveryInput,
   type DeliveryDetail,
   type DeliveryListItem,
   type DeliveryStatus,
+  type ReprocessDispatchTimeoutsResult,
   type TransitionDeliveryInput
 } from "@repo/shared";
 import { buildApiUrl } from "./auth";
@@ -99,8 +103,16 @@ export type DashboardRetailerDeliveriesViewModel = {
 export type DashboardCompanyDeliveriesViewModel = {
   state: "loaded" | "empty" | "error" | "not-company";
   deliveries: DeliveryListItem[];
+  activeQueue: DeliveryListItem[];
+  waitingQueue: DeliveryListItem[];
   error?: string;
+  queueError?: string;
+  waitingError?: string;
   transitionFeedback?: DashboardDeliveryMutationFeedback;
+  reprocessFeedback?: {
+    message: string;
+    result: ReprocessDispatchTimeoutsResult;
+  };
 };
 
 export type DashboardCompanyViewModel = {
@@ -133,6 +145,8 @@ const defaultRetailerDeliveriesViewModel = (): DashboardRetailerDeliveriesViewMo
 
 const defaultCompanyDeliveriesViewModel = (): DashboardCompanyDeliveriesViewModel => ({
   deliveries: [],
+  activeQueue: [],
+  waitingQueue: [],
   state: "empty"
 });
 
@@ -244,6 +258,24 @@ export const transitionCompanyDelivery = async (input: TransitionDeliveryInput, 
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const getDispatchQueue = async (cookieHeader?: string | null, input?: { phase?: "queued" | "offered" }) => {
+  const result = await fetchTrpc("deliveries.dispatchQueue", dispatchQueueListSchema, cookieHeader, input && Object.keys(input).length > 0 ? input : undefined);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const getWaitingQueue = async (
+  cookieHeader?: string | null,
+  input?: { reason?: "max_private_attempts_reached" | "no_candidates_available" }
+) => {
+  const result = await fetchTrpc("deliveries.waitingQueue", waitingQueueListSchema, cookieHeader, input && Object.keys(input).length > 0 ? input : undefined);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const reprocessCompanyDispatch = async (input: { nowIso?: string; companyId?: string }, cookieHeader?: string | null) => {
+  const result = await postTrpc("deliveries.reprocessTimeouts", input, reprocessDispatchTimeoutsResultSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 export const lookupInvitationByToken = async (token: string) => {
   const response = await fetch(buildApiUrl(`/api/invitations/${encodeURIComponent(token)}`), {
     headers: {
@@ -281,6 +313,7 @@ export const getDashboardCompanyViewModel = async (
     } | null;
     createDelivery?: CreateDeliveryInput | null;
     transitionDelivery?: TransitionDeliveryInput | null;
+    reprocessDispatch?: { nowIso?: string; companyId?: string } | null;
   }
 ): Promise<DashboardCompanyViewModel | null> => {
   const currentUser = await getCurrentUser(cookieHeader);
@@ -313,6 +346,8 @@ export const getDashboardCompanyViewModel = async (
         },
         companyDeliveries: {
           deliveries: [],
+          activeQueue: [],
+          waitingQueue: [],
           state: "not-company",
           error: "Somente contas empresa visualizam a fila operacional de entregas."
         }
@@ -381,6 +416,8 @@ export const getDashboardCompanyViewModel = async (
       retailerDeliveries,
       companyDeliveries: {
         deliveries: [],
+        activeQueue: [],
+        waitingQueue: [],
         state: "not-company",
         error: "Somente contas empresa visualizam a fila operacional de entregas."
       }
@@ -457,6 +494,7 @@ export const getDashboardCompanyViewModel = async (
 
   try {
     let transitionFeedback: DashboardCompanyDeliveriesViewModel["transitionFeedback"];
+    let reprocessFeedback: DashboardCompanyDeliveriesViewModel["reprocessFeedback"];
     let transitionedDetail: DeliveryDetail | undefined;
 
     if (options?.transitionDelivery) {
@@ -464,6 +502,8 @@ export const getDashboardCompanyViewModel = async (
       if (!transitioned) {
         companyDeliveries = {
           deliveries: [],
+          activeQueue: [],
+          waitingQueue: [],
           state: "error",
           error: "A sessão foi resolvida, mas a transição da entrega não pôde ser executada porque a autenticação SSR não foi aceita pela API."
         };
@@ -478,22 +518,71 @@ export const getDashboardCompanyViewModel = async (
       }
     }
 
-    if (companyDeliveries.state !== "error") {
-      const rows = await getDeliveries(cookieHeader);
-      if (!rows) {
+    if (companyDeliveries.state !== "error" && options?.reprocessDispatch) {
+      const reprocessed = await reprocessCompanyDispatch(options.reprocessDispatch, cookieHeader);
+      if (!reprocessed) {
         companyDeliveries = {
           deliveries: [],
+          activeQueue: [],
+          waitingQueue: [],
           state: "error",
-          error: "A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada."
+          error: "A sessão foi resolvida, mas o reprocessamento do dispatch não pôde ser executado porque a autenticação SSR não foi aceita pela API."
+        };
+      } else {
+        reprocessFeedback = {
+          message: `Dispatch reprocessado: ${reprocessed.expiredAttempts} tentativas expiradas, ${reprocessed.advancedAttempts} avançadas, ${reprocessed.movedToWaiting} movidas para waiting queue.`,
+          result: reprocessed
+        };
+      }
+    }
+
+    if (companyDeliveries.state !== "error") {
+      const [rows, activeQueueRows, waitingQueueRows] = await Promise.all([
+        getDeliveries(cookieHeader),
+        getDispatchQueue(cookieHeader),
+        getWaitingQueue(cookieHeader)
+      ]);
+
+      const deliveriesRows = rows ?? [];
+      const activeRows = activeQueueRows ?? [];
+      const waitingRows = waitingQueueRows ?? [];
+      const queueErrors: string[] = [];
+
+      if (!rows) {
+        queueErrors.push("A sessão foi resolvida, mas a fila geral de entregas da empresa não pôde ser carregada.");
+      }
+      if (!activeQueueRows) {
+        queueErrors.push("A sessão foi resolvida, mas a fila ativa de dispatch não pôde ser carregada.");
+      }
+      if (!waitingQueueRows) {
+        queueErrors.push("A sessão foi resolvida, mas a waiting queue não pôde ser carregada.");
+      }
+
+      if (queueErrors.length > 0) {
+        companyDeliveries = {
+          deliveries: deliveriesRows,
+          activeQueue: activeRows,
+          waitingQueue: waitingRows,
+          state: "error",
+          error: queueErrors.join(" "),
+          queueError: !activeQueueRows ? "dispatch_queue_unavailable" : undefined,
+          waitingError: !waitingQueueRows ? "waiting_queue_unavailable" : undefined,
+          transitionFeedback,
+          reprocessFeedback
         };
       } else {
         const mergedRows = transitionedDetail
-          ? rows.map((row) => (row.deliveryId === transitionedDetail.deliveryId ? transitionedDetail : row))
-          : rows;
+          ? deliveriesRows.map((row) => (row.deliveryId === transitionedDetail.deliveryId ? transitionedDetail : row))
+          : deliveriesRows;
+        const state = activeRows.length > 0 || waitingRows.length > 0 || mergedRows.length > 0 ? "loaded" : "empty";
+
         companyDeliveries = {
           deliveries: mergedRows,
-          state: mergedRows.length > 0 ? "loaded" : "empty",
-          transitionFeedback
+          activeQueue: activeRows,
+          waitingQueue: waitingRows,
+          state,
+          transitionFeedback,
+          reprocessFeedback
         };
       }
     }
@@ -501,6 +590,8 @@ export const getDashboardCompanyViewModel = async (
     const detail = error instanceof Error ? error.message : "unknown_company_delivery_load_error";
     companyDeliveries = {
       deliveries: [],
+      activeQueue: [],
+      waitingQueue: [],
       state: "error",
       error: `A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada. Diagnóstico: ${detail}`
     };

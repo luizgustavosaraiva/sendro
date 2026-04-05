@@ -542,8 +542,17 @@ const initializeDispatchForDelivery = async (input: {
   };
 
   if (rankingSnapshot.length === 0) {
+    const waitingSince = new Date();
     queueEntryValues.waitingReason = "no_candidates_available";
-    queueEntryValues.waitingSince = new Date();
+    queueEntryValues.waitingSince = waitingSince;
+
+    await input.tx
+      .update(deliveries)
+      .set({
+        status: "queued",
+        updatedAt: waitingSince
+      })
+      .where(eq(deliveries.id, input.delivery.id));
   }
 
   const [queueEntry] = await input.tx

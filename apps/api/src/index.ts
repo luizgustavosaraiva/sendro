@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import { TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { fromNodeHeaders } from "better-auth/node";
+import { assertDb } from "@repo/db";
 import { auth } from "./auth";
 import { env } from "./env";
 import { lookupInvitationByToken } from "./lib/invitations";
@@ -48,7 +49,101 @@ const sendPublicError = (
   reply.status(500).send({ code: "INTERNAL_SERVER_ERROR", message: fallbackMessage });
 };
 
+let dispatchSchemaInitPromise: Promise<void> | null = null;
+
+const ensureDispatchSchemaForTests = async () => {
+  if (env.NODE_ENV !== "test") {
+    return;
+  }
+
+  if (!dispatchSchemaInitPromise) {
+    dispatchSchemaInitPromise = (async () => {
+      const { pool } = assertDb();
+      const client = await pool.connect();
+
+      try {
+        await client.query(`
+          do $$ begin
+            if not exists (select 1 from pg_type where typname = 'dispatch_phase') then
+              create type dispatch_phase as enum ('queued', 'offered', 'waiting', 'completed');
+            end if;
+          end $$;
+        `);
+
+        await client.query(`
+          do $$ begin
+            if not exists (select 1 from pg_type where typname = 'dispatch_attempt_status') then
+              create type dispatch_attempt_status as enum ('pending', 'expired', 'accepted', 'cancelled');
+            end if;
+          end $$;
+        `);
+
+        await client.query(`
+          do $$ begin
+            if not exists (select 1 from pg_type where typname = 'dispatch_waiting_reason') then
+              create type dispatch_waiting_reason as enum ('max_private_attempts_reached', 'no_candidates_available');
+            end if;
+          end $$;
+        `);
+
+        await client.query(`
+          create table if not exists dispatch_queue_entries (
+            id uuid primary key default gen_random_uuid() not null,
+            delivery_id uuid not null references deliveries(id) on delete cascade,
+            company_id uuid not null references companies(id) on delete cascade,
+            phase dispatch_phase default 'queued' not null,
+            timeout_seconds integer default 120 not null,
+            active_attempt_number integer default 0 not null,
+            active_attempt_id uuid,
+            offered_driver_id uuid references drivers(id) on delete set null,
+            offered_driver_name varchar(255),
+            offered_at timestamp with time zone,
+            deadline_at timestamp with time zone,
+            waiting_reason dispatch_waiting_reason,
+            waiting_since timestamp with time zone,
+            ranking_version varchar(64) default 'dispatch-v1' not null,
+            assumptions jsonb default '[]'::jsonb not null,
+            latest_snapshot jsonb default '[]'::jsonb not null,
+            created_at timestamp with time zone default now() not null,
+            updated_at timestamp with time zone default now() not null
+          )
+        `);
+
+        await client.query("create unique index if not exists dispatch_queue_entries_delivery_unique on dispatch_queue_entries (delivery_id)");
+        await client.query("create index if not exists dispatch_queue_entries_company_phase_deadline_idx on dispatch_queue_entries (company_id, phase, deadline_at)");
+
+        await client.query(`
+          create table if not exists dispatch_attempts (
+            id uuid primary key default gen_random_uuid() not null,
+            delivery_id uuid not null references deliveries(id) on delete cascade,
+            queue_entry_id uuid not null references dispatch_queue_entries(id) on delete cascade,
+            company_id uuid not null references companies(id) on delete cascade,
+            attempt_number integer not null,
+            driver_id uuid references drivers(id) on delete set null,
+            status dispatch_attempt_status default 'pending' not null,
+            expires_at timestamp with time zone not null,
+            resolved_at timestamp with time zone,
+            candidate_snapshot jsonb default null,
+            created_at timestamp with time zone default now() not null,
+            updated_at timestamp with time zone default now() not null,
+            constraint dispatch_attempts_delivery_attempt_unique unique (delivery_id, attempt_number)
+          )
+        `);
+
+        await client.query("create index if not exists dispatch_attempts_queue_status_deadline_idx on dispatch_attempts (queue_entry_id, status, expires_at)");
+        await client.query("create index if not exists dispatch_attempts_company_status_deadline_idx on dispatch_attempts (company_id, status, expires_at)");
+      } finally {
+        client.release();
+      }
+    })();
+  }
+
+  await dispatchSchemaInitPromise;
+};
+
 export const buildApp = async () => {
+  await ensureDispatchSchemaForTests();
+
   const app = Fastify({ logger: env.NODE_ENV !== "test" });
 
   await app.register(cors, {
