@@ -3,10 +3,11 @@ import {
   deliveryActorTypes,
   deliveryStatuses,
   deliveryTransitionableStatuses,
-  dispatchAttemptStatuses,
   dispatchPhases,
   dispatchRankingSignals,
-  dispatchWaitingReasons
+  dispatchWaitingReasons,
+  driverOfferStatuses,
+  driverStrikeConsequences
 } from "../types/deliveries";
 
 const deliveryMetadataSchema: z.ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown());
@@ -15,9 +16,10 @@ export const deliveryStatusSchema = z.enum(deliveryStatuses);
 export const deliveryActorTypeSchema = z.enum(deliveryActorTypes);
 export const deliveryTransitionableStatusSchema = z.enum(deliveryTransitionableStatuses);
 export const dispatchPhaseSchema = z.enum(dispatchPhases);
-export const dispatchAttemptStatusSchema = z.enum(dispatchAttemptStatuses);
+export const driverOfferStatusSchema = z.enum(driverOfferStatuses);
 export const dispatchWaitingReasonSchema = z.enum(dispatchWaitingReasons);
 export const dispatchRankingSignalSchema = z.enum(dispatchRankingSignals);
+export const driverStrikeConsequenceSchema = z.enum(driverStrikeConsequences);
 
 export const createDeliverySchema = z.object({
   companyId: z.string().uuid(),
@@ -38,6 +40,13 @@ export const getDeliveryDetailSchema = z.object({
 export const transitionDeliverySchema = z.object({
   deliveryId: z.string().uuid(),
   status: deliveryTransitionableStatusSchema,
+  metadata: deliveryMetadataSchema.optional()
+});
+
+export const resolveDriverOfferSchema = z.object({
+  deliveryId: z.string().uuid(),
+  decision: z.enum(["accept", "reject"]),
+  reason: z.string().trim().min(3).max(120).optional().nullable(),
   metadata: deliveryMetadataSchema.optional()
 });
 
@@ -86,15 +95,32 @@ export const dispatchCandidateSnapshotSchema = z.object({
   provisionalSignals: z.array(dispatchRankingSignalSchema)
 });
 
+export const driverStrikeSchema = z.object({
+  strikeId: z.string().uuid(),
+  companyId: z.string().uuid(),
+  driverId: z.string().uuid(),
+  bondId: z.string().uuid(),
+  deliveryId: z.string().uuid(),
+  dispatchAttemptId: z.string().uuid(),
+  attemptNumber: z.number().int().positive(),
+  reason: z.string(),
+  consequence: driverStrikeConsequenceSchema,
+  metadata: deliveryMetadataSchema,
+  createdAt: z.string()
+});
+
 export const deliveryDispatchAttemptSchema = z.object({
   attemptId: z.string().uuid(),
   deliveryId: z.string().uuid(),
   companyId: z.string().uuid(),
   attemptNumber: z.number().int().positive(),
   driverId: z.string().uuid().nullable(),
-  status: dispatchAttemptStatusSchema,
+  offerStatus: driverOfferStatusSchema,
   expiresAt: z.string(),
   resolvedAt: z.string().nullable(),
+  resolvedByActorType: deliveryActorTypeSchema.nullable(),
+  resolvedByActorId: z.string().nullable(),
+  resolutionReason: z.string().nullable(),
   candidateSnapshot: dispatchCandidateSnapshotSchema.nullable(),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -118,6 +144,7 @@ export const deliveryDispatchStateSchema = z.object({
   assumptions: z.array(z.string()),
   latestSnapshot: z.array(dispatchCandidateSnapshotSchema),
   attempts: z.array(deliveryDispatchAttemptSchema),
+  strikes: z.array(driverStrikeSchema),
   createdAt: z.string(),
   updatedAt: z.string()
 });
@@ -139,6 +166,13 @@ export const deliveryListItemSchema = z.object({
 });
 
 export const deliveryDetailSchema = deliveryListItemSchema;
+export const resolveDriverOfferResultSchema = z.object({
+  delivery: deliveryDetailSchema,
+  resolution: z.enum(["accepted", "rejected"]),
+  attemptId: z.string().uuid(),
+  queueEntryId: z.string().uuid(),
+  strike: driverStrikeSchema.nullable()
+});
 export const deliveryListSchema = z.array(deliveryListItemSchema);
 export const dispatchQueueListSchema = z.array(deliveryListItemSchema);
 export const waitingQueueListSchema = z.array(deliveryListItemSchema);

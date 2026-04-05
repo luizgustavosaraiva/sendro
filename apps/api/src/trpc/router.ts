@@ -16,6 +16,8 @@ import {
   redeemInvitationSchema,
   reprocessDispatchTimeoutsResultSchema,
   reprocessDispatchTimeoutsSchema,
+  resolveDriverOfferResultSchema,
+  resolveDriverOfferSchema,
   retailerBondRequestSchema,
   retailerCompanyBondGateResultSchema,
   retailerCompanyBondGateSchema,
@@ -38,6 +40,7 @@ import {
   listDispatchQueue,
   listWaitingQueue,
   reprocessDispatchTimeouts,
+  resolveDriverOffer,
   transitionDelivery
 } from "../lib/dispatch";
 import {
@@ -121,6 +124,10 @@ export const appRouter = router({
       .input(getDeliveryDetailSchema)
       .output(deliveryDetailSchema)
       .query(async ({ ctx, input }) => getDeliveryDetail({ user: ctx.session.user as never, deliveryId: input.deliveryId })),
+    resolveOffer: protectedProcedure
+      .input(resolveDriverOfferSchema)
+      .output(resolveDriverOfferResultSchema)
+      .mutation(async ({ ctx, input }) => resolveDriverOffer({ user: ctx.session.user as never, data: input })),
     transition: protectedProcedure
       .input(transitionDeliverySchema)
       .output(deliveryDetailSchema)

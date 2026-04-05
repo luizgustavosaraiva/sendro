@@ -21,8 +21,11 @@ export type DeliveryTransitionableStatus = (typeof deliveryTransitionableStatuse
 export const dispatchPhases = ["queued", "offered", "waiting", "completed"] as const;
 export type DispatchPhase = (typeof dispatchPhases)[number];
 
-export const dispatchAttemptStatuses = ["pending", "expired", "accepted", "cancelled"] as const;
-export type DispatchAttemptStatus = (typeof dispatchAttemptStatuses)[number];
+export const driverOfferStatuses = ["pending", "accepted", "rejected", "expired"] as const;
+export type DriverOfferStatus = (typeof driverOfferStatuses)[number];
+
+export const driverStrikeConsequences = ["warning", "bond_suspended", "bond_revoked"] as const;
+export type DriverStrikeConsequence = (typeof driverStrikeConsequences)[number];
 
 export const dispatchWaitingReasons = ["max_private_attempts_reached", "no_candidates_available"] as const;
 export type DispatchWaitingReason = (typeof dispatchWaitingReasons)[number];
@@ -62,15 +65,32 @@ export type DispatchCandidateSnapshot = {
   provisionalSignals: DispatchRankingSignal[];
 };
 
+export type DriverStrike = {
+  strikeId: string;
+  companyId: string;
+  driverId: string;
+  bondId: string;
+  deliveryId: string;
+  dispatchAttemptId: string;
+  attemptNumber: number;
+  reason: string;
+  consequence: DriverStrikeConsequence;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type DeliveryDispatchAttempt = {
   attemptId: string;
   deliveryId: string;
   companyId: string;
   attemptNumber: number;
   driverId: string | null;
-  status: DispatchAttemptStatus;
+  offerStatus: DriverOfferStatus;
   expiresAt: string;
   resolvedAt: string | null;
+  resolvedByActorType: DeliveryActorType | null;
+  resolvedByActorId: string | null;
+  resolutionReason: string | null;
   candidateSnapshot: DispatchCandidateSnapshot | null;
   createdAt: string;
   updatedAt: string;
@@ -94,6 +114,7 @@ export type DeliveryDispatchState = {
   assumptions: string[];
   latestSnapshot: DispatchCandidateSnapshot[];
   attempts: DeliveryDispatchAttempt[];
+  strikes: DriverStrike[];
   createdAt: string;
   updatedAt: string;
 };
@@ -136,6 +157,23 @@ export type TransitionDeliveryInput = {
   deliveryId: string;
   status: DeliveryTransitionableStatus;
   metadata?: Record<string, unknown>;
+};
+
+export type DriverOfferDecision = "accept" | "reject";
+
+export type ResolveDriverOfferInput = {
+  deliveryId: string;
+  decision: DriverOfferDecision;
+  reason?: string | null;
+  metadata?: Record<string, unknown>;
+};
+
+export type ResolveDriverOfferResult = {
+  delivery: DeliveryDetail;
+  resolution: "accepted" | "rejected";
+  attemptId: string;
+  queueEntryId: string;
+  strike: DriverStrike | null;
 };
 
 export type DispatchQueueFiltersInput = {
