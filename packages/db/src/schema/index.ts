@@ -42,6 +42,9 @@ export const deliveryActorTypeEnum = pgEnum("delivery_actor_type", [
   "retailer",
   "driver"
 ]);
+export const dispatchPhaseEnum = pgEnum("dispatch_phase", ["queued", "offered", "waiting", "completed"]);
+export const dispatchAttemptStatusEnum = pgEnum("dispatch_attempt_status", ["pending", "expired", "accepted", "cancelled"]);
+export const dispatchWaitingReasonEnum = pgEnum("dispatch_waiting_reason", ["max_private_attempts_reached", "no_candidates_available"]);
 export const driverLifecycleEnum = pgEnum("driver_lifecycle", ["onboarding", "active", "paused", "blocked"]);
 export const retailerLifecycleEnum = pgEnum("retailer_lifecycle", ["onboarding", "active", "suspended"]);
 export const companyLifecycleEnum = pgEnum("company_lifecycle", ["onboarding", "active", "suspended"]);
@@ -243,6 +246,69 @@ export const deliveries = pgTable(
   })
 );
 
+export const dispatchQueueEntries = pgTable(
+  "dispatch_queue_entries",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    deliveryId: uuid("delivery_id")
+      .notNull()
+      .references(() => deliveries.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    phase: dispatchPhaseEnum("phase").default("queued").notNull(),
+    timeoutSeconds: integer("timeout_seconds").default(120).notNull(),
+    activeAttemptNumber: integer("active_attempt_number").default(0).notNull(),
+    activeAttemptId: uuid("active_attempt_id"),
+    offeredDriverId: uuid("offered_driver_id").references(() => drivers.id, { onDelete: "set null" }),
+    offeredDriverName: varchar("offered_driver_name", { length: 255 }),
+    offeredAt: timestamp("offered_at", { withTimezone: true }),
+    deadlineAt: timestamp("deadline_at", { withTimezone: true }),
+    waitingReason: dispatchWaitingReasonEnum("waiting_reason"),
+    waitingSince: timestamp("waiting_since", { withTimezone: true }),
+    rankingVersion: varchar("ranking_version", { length: 64 }).default("dispatch-v1").notNull(),
+    assumptions: jsonb("assumptions").default(sql`'[]'::jsonb`).notNull(),
+    latestSnapshot: jsonb("latest_snapshot").default(sql`'[]'::jsonb`).notNull(),
+    ...timestamps
+  },
+  (table) => ({
+    deliveryUniqueIdx: uniqueIndex("dispatch_queue_entries_delivery_unique").on(table.deliveryId),
+    companyPhaseDeadlineIdx: index("dispatch_queue_entries_company_phase_deadline_idx").on(
+      table.companyId,
+      table.phase,
+      table.deadlineAt
+    )
+  })
+);
+
+export const dispatchAttempts = pgTable(
+  "dispatch_attempts",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    deliveryId: uuid("delivery_id")
+      .notNull()
+      .references(() => deliveries.id, { onDelete: "cascade" }),
+    queueEntryId: uuid("queue_entry_id")
+      .notNull()
+      .references(() => dispatchQueueEntries.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    attemptNumber: integer("attempt_number").notNull(),
+    driverId: uuid("driver_id").references(() => drivers.id, { onDelete: "set null" }),
+    status: dispatchAttemptStatusEnum("status").default("pending").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    candidateSnapshot: jsonb("candidate_snapshot").default(sql`null`),
+    ...timestamps
+  },
+  (table) => ({
+    deliveryAttemptUniqueIdx: uniqueIndex("dispatch_attempts_delivery_attempt_unique").on(table.deliveryId, table.attemptNumber),
+    queueStatusDeadlineIdx: index("dispatch_attempts_queue_status_deadline_idx").on(table.queueEntryId, table.status, table.expiresAt),
+    companyStatusDeadlineIdx: index("dispatch_attempts_company_status_deadline_idx").on(table.companyId, table.status, table.expiresAt)
+  })
+);
+
 export const deliveryEvents = pgTable(
   "delivery_events",
   {
@@ -358,7 +424,47 @@ export const deliveriesRelations = relations(deliveries, ({ one, many }) => ({
     fields: [deliveries.driverId],
     references: [drivers.id]
   }),
-  events: many(deliveryEvents)
+  events: many(deliveryEvents),
+  dispatchQueueEntry: one(dispatchQueueEntries, {
+    fields: [deliveries.id],
+    references: [dispatchQueueEntries.deliveryId]
+  }),
+  dispatchAttempts: many(dispatchAttempts)
+}));
+
+export const dispatchQueueEntriesRelations = relations(dispatchQueueEntries, ({ one, many }) => ({
+  delivery: one(deliveries, {
+    fields: [dispatchQueueEntries.deliveryId],
+    references: [deliveries.id]
+  }),
+  company: one(companies, {
+    fields: [dispatchQueueEntries.companyId],
+    references: [companies.id]
+  }),
+  offeredDriver: one(drivers, {
+    fields: [dispatchQueueEntries.offeredDriverId],
+    references: [drivers.id]
+  }),
+  attempts: many(dispatchAttempts)
+}));
+
+export const dispatchAttemptsRelations = relations(dispatchAttempts, ({ one }) => ({
+  delivery: one(deliveries, {
+    fields: [dispatchAttempts.deliveryId],
+    references: [deliveries.id]
+  }),
+  queueEntry: one(dispatchQueueEntries, {
+    fields: [dispatchAttempts.queueEntryId],
+    references: [dispatchQueueEntries.id]
+  }),
+  company: one(companies, {
+    fields: [dispatchAttempts.companyId],
+    references: [companies.id]
+  }),
+  driver: one(drivers, {
+    fields: [dispatchAttempts.driverId],
+    references: [drivers.id]
+  })
 }));
 
 export const deliveryEventsRelations = relations(deliveryEvents, ({ one }) => ({
@@ -380,6 +486,9 @@ export const schema = {
   invitationStatusEnum,
   deliveryStatusEnum,
   deliveryActorTypeEnum,
+  dispatchPhaseEnum,
+  dispatchAttemptStatusEnum,
+  dispatchWaitingReasonEnum,
   driverLifecycleEnum,
   retailerLifecycleEnum,
   companyLifecycleEnum,
@@ -393,6 +502,8 @@ export const schema = {
   bonds,
   invitations,
   deliveries,
+  dispatchQueueEntries,
+  dispatchAttempts,
   deliveryEvents
 };
 

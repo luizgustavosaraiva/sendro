@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import request from "supertest";
-import { assertDb, bonds, companies, deliveryEvents, deliveries, retailers, users } from "@repo/db";
+import { assertDb, bonds, companies, deliveryEvents, deliveries, dispatchAttempts, dispatchQueueEntries, drivers, users } from "@repo/db";
 import { and, asc, eq } from "drizzle-orm";
 import { buildApp } from "../src/index";
 
@@ -54,7 +54,7 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     }
   }, 30000);
 
-  it("supports retailer creation, scoped listing, detail, and validated transition timeline up to in_transit", async () => {
+  it("creates dispatch-backed deliveries with append-only timeline evidence and completes dispatch on assignment", async () => {
     const { db } = assertDb();
     const suffix = Date.now();
 
@@ -79,19 +79,53 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       retailerName: "Retailer Outsider"
     });
 
+    const driverAgentA = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Ranked A",
+      email: `driver.rankeda.${suffix}@sendro.test`,
+      driverName: "Driver Ranked A",
+      phone: `+5511${String(suffix).slice(-8)}`
+    });
+
+    const driverAgentB = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Ranked B",
+      email: `driver.rankedb.${suffix}@sendro.test`,
+      driverName: "Driver Ranked B",
+      phone: `+5521${String(suffix).slice(-8)}`
+    });
+
     const companyProfile = trpcJson(await companyAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
     const retailerProfile = trpcJson(await retailerAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const driverProfileA = trpcJson(await driverAgentA.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const driverProfileB = trpcJson(await driverAgentB.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
 
     const [retailerUser] = await db.select().from(users).where(eq(users.email, `retailer.delivery.${suffix}@sendro.test`)).limit(1);
     expect(retailerUser).toBeTruthy();
 
-    await db.insert(bonds).values({
-      companyId: companyProfile.id,
-      entityId: retailerProfile.id,
-      entityType: "retailer",
-      status: "active",
-      requestedByUserId: retailerUser!.id
-    });
+    await db.insert(bonds).values([
+      {
+        companyId: companyProfile.id,
+        entityId: retailerProfile.id,
+        entityType: "retailer",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: companyProfile.id,
+        entityId: driverProfileA.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: companyProfile.id,
+        entityId: driverProfileB.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      }
+    ]);
 
     const createResponse = await retailerAgent
       .post("/trpc/deliveries.create")
@@ -109,20 +143,38 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(created).toMatchObject({
       companyId: companyProfile.id,
       retailerId: retailerProfile.id,
-      status: "created",
+      status: "offered",
       externalReference: `ORDER-${suffix}`,
       pickupAddress: "Rua A, 100",
       dropoffAddress: "Rua B, 200"
     });
-    expect(created.timeline).toHaveLength(1);
-    expect(created.timeline[0]).toMatchObject({ status: "created", actorType: "retailer", actorId: retailerUser!.id, sequence: 1 });
+    expect(created.timeline.map((event: { status: string; sequence: number }) => [event.sequence, event.status])).toEqual([
+      [1, "created"],
+      [2, "queued"],
+      [3, "offered"]
+    ]);
+    expect(created.dispatch).toMatchObject({
+      phase: "offered",
+      activeAttemptNumber: 1,
+      timeoutSeconds: 120,
+      waitingReason: null,
+      rankingVersion: "dispatch-v1"
+    });
+    expect(created.dispatch.latestSnapshot).toHaveLength(2);
+    expect(created.dispatch.latestSnapshot[0].driverId).toBe(driverProfileA.id);
+    expect(created.dispatch.latestSnapshot[1].driverId).toBe(driverProfileB.id);
+    expect(created.dispatch.attempts).toHaveLength(1);
+    expect(created.dispatch.attempts[0]).toMatchObject({
+      attemptNumber: 1,
+      driverId: driverProfileA.id,
+      status: "pending"
+    });
 
     const companyListResponse = await companyAgent.get(listUrl()).set("origin", "http://localhost:3000");
     expect(companyListResponse.status, companyListResponse.text).toBe(200);
     const companyList = trpcJson(companyListResponse);
     expect(companyList).toHaveLength(1);
-    expect(companyList[0].deliveryId).toBe(created.deliveryId);
-    expect(companyList[0].timeline).toHaveLength(1);
+    expect(companyList[0].dispatch.phase).toBe("offered");
 
     const retailerListResponse = await retailerAgent.get(listUrl()).set("origin", "http://localhost:3000");
     expect(retailerListResponse.status, retailerListResponse.text).toBe(200);
@@ -155,17 +207,21 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(inTransit).toMatchObject({ status: "in_transit" });
     expect(inTransit.timeline.map((event: { status: string; sequence: number }) => [event.sequence, event.status])).toEqual([
       [1, "created"],
-      [2, "assigned"],
-      [3, "picked_up"],
-      [4, "in_transit"]
+      [2, "queued"],
+      [3, "offered"],
+      [4, "assigned"],
+      [5, "picked_up"],
+      [6, "in_transit"]
     ]);
+    expect(inTransit.dispatch.phase).toBe("completed");
+    expect(inTransit.dispatch.attempts[0].status).toBe("accepted");
 
     const detailResponse = await companyAgent.get(detailUrl(created.deliveryId)).set("origin", "http://localhost:3000");
     expect(detailResponse.status, detailResponse.text).toBe(200);
     const detail = trpcJson(detailResponse);
     expect(detail.status).toBe("in_transit");
-    expect(detail.timeline).toHaveLength(4);
-    expect(detail.timeline[3]).toMatchObject({ status: "in_transit", sequence: 4, actorType: "company" });
+    expect(detail.timeline).toHaveLength(6);
+    expect(detail.timeline[5]).toMatchObject({ status: "in_transit", sequence: 6, actorType: "company" });
 
     const filteredResponse = await companyAgent.get(listUrl({ status: "in_transit" })).set("origin", "http://localhost:3000");
     expect(filteredResponse.status, filteredResponse.text).toBe(200);
@@ -174,13 +230,25 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     const [storedDelivery] = await db.select().from(deliveries).where(eq(deliveries.id, created.deliveryId)).limit(1);
     expect(storedDelivery?.status).toBe("in_transit");
 
+    const [queueEntry] = await db.select().from(dispatchQueueEntries).where(eq(dispatchQueueEntries.deliveryId, created.deliveryId)).limit(1);
+    expect(queueEntry).toBeTruthy();
+    expect(queueEntry?.phase).toBe("completed");
+
+    const storedAttempts = await db
+      .select()
+      .from(dispatchAttempts)
+      .where(eq(dispatchAttempts.deliveryId, created.deliveryId))
+      .orderBy(asc(dispatchAttempts.attemptNumber));
+    expect(storedAttempts).toHaveLength(1);
+    expect(storedAttempts[0].status).toBe("accepted");
+
     const storedEvents = await db
       .select()
       .from(deliveryEvents)
       .where(eq(deliveryEvents.deliveryId, created.deliveryId))
       .orderBy(asc(deliveryEvents.sequence));
-    expect(storedEvents.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
-    expect(storedEvents.map((event) => event.status)).toEqual(["created", "assigned", "picked_up", "in_transit"]);
+    expect(storedEvents.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(storedEvents.map((event) => event.status)).toEqual(["created", "queued", "offered", "assigned", "picked_up", "in_transit"]);
     expect(storedEvents.every((event) => Boolean(event.createdAt))).toBe(true);
   }, 30000);
 
@@ -238,7 +306,7 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       name: "Driver Negative Delivery",
       email: `driver.negative.delivery.${suffix}@sendro.test`,
       driverName: "Driver Negative Delivery",
-      phone: `+5511${String(suffix).slice(-8)}`
+      phone: `+5531${String(suffix).slice(-8)}`
     });
     const wrongRoleListResponse = await wrongRoleList.get(listUrl()).set("origin", "http://localhost:3000");
     expect(wrongRoleListResponse.status).toBe(403);
@@ -265,7 +333,7 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       .set("origin", "http://localhost:3000")
       .send({ deliveryId: created.deliveryId, status: "in_transit" });
     expect(invalidTransition.status).toBe(400);
-    expect(trpcErrorMessage(invalidTransition)).toContain("delivery_transition_invalid:created->in_transit");
+    expect(trpcErrorMessage(invalidTransition)).toContain("delivery_transition_invalid:offered->in_transit");
 
     const retailerTransition = await retailerAgent
       .post("/trpc/deliveries.transition")
@@ -299,19 +367,18 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(trpcErrorMessage(foreignRetailerCreate)).toContain("bond_active_required:retailer_company");
 
     const [storedDelivery] = await db.select().from(deliveries).where(eq(deliveries.id, created.deliveryId)).limit(1);
-    expect(storedDelivery?.status).toBe("created");
+    expect(storedDelivery?.status).toBe("offered");
 
     const storedEvents = await db
       .select()
       .from(deliveryEvents)
       .where(eq(deliveryEvents.deliveryId, created.deliveryId))
       .orderBy(asc(deliveryEvents.sequence));
-    expect(storedEvents).toHaveLength(1);
-    expect(storedEvents[0].status).toBe("created");
+    expect(storedEvents).toHaveLength(3);
+    expect(storedEvents.map((event) => event.status)).toEqual(["created", "queued", "offered"]);
 
     const [companyRow] = await db.select().from(companies).where(eq(companies.id, companyProfile.id)).limit(1);
-    const [retailerRow] = await db.select().from(retailers).where(eq(retailers.id, retailerProfile.id)).limit(1);
-    expect(companyRow && retailerRow).toBeTruthy();
+    expect(companyRow).toBeTruthy();
 
     const matchingBonds = await db
       .select()

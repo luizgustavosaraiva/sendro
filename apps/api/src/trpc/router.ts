@@ -8,14 +8,20 @@ import {
   createInvitationSchema,
   deliveryDetailSchema,
   deliveryListSchema,
+  dispatchQueueFiltersSchema,
+  dispatchQueueListSchema,
   getDeliveryDetailSchema,
   lookupInvitationResultSchema,
   redeemInvitationResultSchema,
   redeemInvitationSchema,
+  reprocessDispatchTimeoutsResultSchema,
+  reprocessDispatchTimeoutsSchema,
   retailerBondRequestSchema,
   retailerCompanyBondGateResultSchema,
   retailerCompanyBondGateSchema,
   transitionDeliverySchema,
+  waitingQueueFiltersSchema,
+  waitingQueueListSchema,
   listDeliveriesSchema
 } from "@repo/shared";
 import { ensureProfileForUser } from "../routes/auth/register";
@@ -25,7 +31,15 @@ import {
   listCompanyBondLists,
   requestRetailerBond
 } from "../lib/bonds";
-import { createDelivery, getDeliveryDetail, listDeliveries, transitionDelivery } from "../lib/deliveries";
+import {
+  createDelivery,
+  getDeliveryDetail,
+  listDeliveries,
+  listDispatchQueue,
+  listWaitingQueue,
+  reprocessDispatchTimeouts,
+  transitionDelivery
+} from "../lib/dispatch";
 import {
   createCompanyInvitation,
   listCompanyInvitations,
@@ -110,7 +124,19 @@ export const appRouter = router({
     transition: protectedProcedure
       .input(transitionDeliverySchema)
       .output(deliveryDetailSchema)
-      .mutation(async ({ ctx, input }) => transitionDelivery({ user: ctx.session.user as never, data: input }))
+      .mutation(async ({ ctx, input }) => transitionDelivery({ user: ctx.session.user as never, data: input })),
+    dispatchQueue: protectedProcedure
+      .input(dispatchQueueFiltersSchema.optional())
+      .output(dispatchQueueListSchema)
+      .query(async ({ ctx, input }) => listDispatchQueue({ user: ctx.session.user as never, filters: input })),
+    waitingQueue: protectedProcedure
+      .input(waitingQueueFiltersSchema.optional())
+      .output(waitingQueueListSchema)
+      .query(async ({ ctx, input }) => listWaitingQueue({ user: ctx.session.user as never, filters: input })),
+    reprocessTimeouts: protectedProcedure
+      .input(reprocessDispatchTimeoutsSchema.optional())
+      .output(reprocessDispatchTimeoutsResultSchema)
+      .mutation(async ({ ctx, input }) => reprocessDispatchTimeouts({ user: ctx.session.user as never, data: input }))
   })
 });
 
