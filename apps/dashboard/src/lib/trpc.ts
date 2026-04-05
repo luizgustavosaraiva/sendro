@@ -9,13 +9,17 @@ import {
   lookupInvitationResultSchema,
   redeemInvitationResultSchema,
   reprocessDispatchTimeoutsResultSchema,
+  resolveDriverOfferResultSchema,
+  resolveDriverOfferSchema,
   transitionDeliverySchema,
-  waitingQueueListSchema,
   type CreateDeliveryInput,
   type DeliveryDetail,
   type DeliveryListItem,
   type DeliveryStatus,
+  type DriverStrike,
   type ReprocessDispatchTimeoutsResult,
+  type ResolveDriverOfferInput,
+  type ResolveDriverOfferResult,
   type TransitionDeliveryInput
 } from "@repo/shared";
 import { buildApiUrl } from "./auth";
@@ -82,6 +86,31 @@ type DashboardDeliveryMutationFeedback = {
   message: string;
 };
 
+export type DashboardDriverDeliveriesViewModel = {
+  state: "loaded" | "empty" | "error" | "not-driver";
+  deliveries: DeliveryListItem[];
+  error?: string;
+  activeOffer?: DeliveryListItem | null;
+  offerState?: "loaded" | "empty" | "error" | "not-driver";
+  offerError?: string;
+  strikeSummary?: {
+    total: number;
+    lastStrike: DriverStrike | null;
+    activeConsequence: string | null;
+    bondStatus: string | null;
+  };
+  strikeState?: "loaded" | "empty" | "error" | "not-driver";
+  resolutionFeedback?: {
+    resolution: ResolveDriverOfferResult["resolution"];
+    attemptId: string;
+    queueEntryId: string;
+    deliveryId: string;
+    status: DeliveryStatus;
+    strike: DriverStrike | null;
+    message: string;
+  };
+};
+
 export type DashboardCompanyInvitationViewModel = {
   invitations: CompanyInvitationListItem[];
   state: "loaded" | "empty" | "error" | "not-company";
@@ -125,6 +154,7 @@ export type DashboardCompanyViewModel = {
   invitations: DashboardCompanyInvitationViewModel;
   retailerDeliveries: DashboardRetailerDeliveriesViewModel;
   companyDeliveries: DashboardCompanyDeliveriesViewModel;
+  driverDeliveries: DashboardDriverDeliveriesViewModel;
 };
 
 const defaultBondLists = (): CompanyBondLists => ({
@@ -147,6 +177,20 @@ const defaultCompanyDeliveriesViewModel = (): DashboardCompanyDeliveriesViewMode
   deliveries: [],
   activeQueue: [],
   waitingQueue: [],
+  state: "empty"
+});
+
+const defaultDriverDeliveriesViewModel = (): DashboardDriverDeliveriesViewModel => ({
+  deliveries: [],
+  activeOffer: null,
+  offerState: "empty",
+  strikeSummary: {
+    total: 0,
+    lastStrike: null,
+    activeConsequence: null,
+    bondStatus: null
+  },
+  strikeState: "empty",
   state: "empty"
 });
 
@@ -237,7 +281,12 @@ export const getCompanyBondLists = async (cookieHeader?: string | null) => {
 };
 
 export const getDeliveries = async (cookieHeader?: string | null, input?: { status?: DeliveryStatus }) => {
-  const result = await fetchTrpc("deliveries.list", deliveryListSchema, cookieHeader, input && Object.keys(input).length > 0 ? input : undefined);
+  const result = await fetchTrpc(
+    "deliveries.list",
+    deliveryListSchema,
+    cookieHeader,
+    input && Object.keys(input).length > 0 ? input : undefined
+  );
   return result.kind === "unauthorized" ? null : result.data;
 };
 
@@ -258,8 +307,19 @@ export const transitionCompanyDelivery = async (input: TransitionDeliveryInput, 
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const resolveDriverDeliveryOffer = async (input: ResolveDriverOfferInput, cookieHeader?: string | null) => {
+  const parsedInput = resolveDriverOfferSchema.parse(input);
+  const result = await postTrpc("deliveries.resolveOffer", parsedInput, resolveDriverOfferResultSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 export const getDispatchQueue = async (cookieHeader?: string | null, input?: { phase?: "queued" | "offered" }) => {
-  const result = await fetchTrpc("deliveries.dispatchQueue", dispatchQueueListSchema, cookieHeader, input && Object.keys(input).length > 0 ? input : undefined);
+  const result = await fetchTrpc(
+    "deliveries.dispatchQueue",
+    dispatchQueueListSchema,
+    cookieHeader,
+    input && Object.keys(input).length > 0 ? input : undefined
+  );
   return result.kind === "unauthorized" ? null : result.data;
 };
 
@@ -267,7 +327,12 @@ export const getWaitingQueue = async (
   cookieHeader?: string | null,
   input?: { reason?: "max_private_attempts_reached" | "no_candidates_available" }
 ) => {
-  const result = await fetchTrpc("deliveries.waitingQueue", waitingQueueListSchema, cookieHeader, input && Object.keys(input).length > 0 ? input : undefined);
+  const result = await fetchTrpc(
+    "deliveries.waitingQueue",
+    dispatchQueueListSchema,
+    cookieHeader,
+    input && Object.keys(input).length > 0 ? input : undefined
+  );
   return result.kind === "unauthorized" ? null : result.data;
 };
 
@@ -304,6 +369,41 @@ export const createCompanyInvitation = async (
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+const buildDriverStrikeSummary = (deliveries: DeliveryListItem[]) => {
+  const strikes = deliveries.flatMap((delivery) => delivery.dispatch?.strikes ?? []);
+  if (strikes.length === 0) {
+    const lastBondStatus = deliveries
+      .map((delivery) => {
+        const offeredDriverId = delivery.dispatch?.offeredDriverId ?? null;
+        if (!offeredDriverId || offeredDriverId !== delivery.driverId) return null;
+        return null;
+      })
+      .find((value) => value !== undefined);
+
+    return {
+      total: 0,
+      lastStrike: null,
+      activeConsequence: null,
+      bondStatus: lastBondStatus ?? null
+    };
+  }
+
+  const sorted = [...strikes].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const lastStrike = sorted[0];
+
+  return {
+    total: strikes.length,
+    lastStrike,
+    activeConsequence: lastStrike.consequence,
+    bondStatus:
+      lastStrike.consequence === "bond_revoked"
+        ? "revoked"
+        : lastStrike.consequence === "bond_suspended"
+          ? "suspended"
+          : "active"
+  };
+};
+
 export const getDashboardCompanyViewModel = async (
   cookieHeader?: string | null,
   options?: {
@@ -314,6 +414,7 @@ export const getDashboardCompanyViewModel = async (
     createDelivery?: CreateDeliveryInput | null;
     transitionDelivery?: TransitionDeliveryInput | null;
     reprocessDispatch?: { nowIso?: string; companyId?: string } | null;
+    resolveDriverOffer?: ResolveDriverOfferInput | null;
   }
 ): Promise<DashboardCompanyViewModel | null> => {
   const currentUser = await getCurrentUser(cookieHeader);
@@ -324,6 +425,105 @@ export const getDashboardCompanyViewModel = async (
 
   const isCompany = currentUser.user.role === "company";
   const isRetailer = currentUser.user.role === "retailer";
+  const isDriver = currentUser.user.role === "driver";
+
+  if (isDriver) {
+    let driverDeliveries = defaultDriverDeliveriesViewModel();
+
+    try {
+      let resolutionFeedback: DashboardDriverDeliveriesViewModel["resolutionFeedback"];
+      if (options?.resolveDriverOffer) {
+        const resolved = await resolveDriverDeliveryOffer(options.resolveDriverOffer, cookieHeader);
+        if (!resolved) {
+          driverDeliveries = {
+            ...defaultDriverDeliveriesViewModel(),
+            state: "error",
+            offerState: "error",
+            strikeState: "error",
+            error: "A sessão foi resolvida, mas a resposta da oferta não pôde ser enviada porque a autenticação SSR não foi aceita pela API.",
+            offerError: "driver_offer_resolution_unauthorized"
+          };
+        } else {
+          resolutionFeedback = {
+            resolution: resolved.resolution,
+            attemptId: resolved.attemptId,
+            queueEntryId: resolved.queueEntryId,
+            deliveryId: resolved.delivery.deliveryId,
+            status: resolved.delivery.status,
+            strike: resolved.strike,
+            message:
+              resolved.resolution === "accepted"
+                ? `Oferta ${resolved.attemptId} aceita e entrega ${resolved.delivery.deliveryId} atualizada para ${resolved.delivery.status}.`
+                : `Oferta ${resolved.attemptId} rejeitada para a entrega ${resolved.delivery.deliveryId}.`
+          };
+        }
+      }
+
+      if (driverDeliveries.state !== "error") {
+        const rows = await getDeliveries(cookieHeader);
+        if (!rows) {
+          driverDeliveries = {
+            ...defaultDriverDeliveriesViewModel(),
+            state: "error",
+            offerState: "error",
+            strikeState: "error",
+            error: "A sessão foi resolvida, mas as entregas do entregador não puderam ser carregadas.",
+            offerError: "driver_deliveries_unavailable"
+          };
+        } else {
+          const activeOffer = rows.find((delivery) => delivery.dispatch?.phase === "offered" && delivery.dispatch?.activeAttemptId);
+          const strikeSummary = buildDriverStrikeSummary(rows);
+          const state = rows.length > 0 ? "loaded" : "empty";
+          driverDeliveries = {
+            deliveries: rows,
+            state,
+            activeOffer: activeOffer ?? null,
+            offerState: activeOffer ? "loaded" : rows.length > 0 ? "empty" : "empty",
+            strikeSummary,
+            strikeState: strikeSummary.total > 0 ? "loaded" : "empty",
+            resolutionFeedback
+          };
+        }
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "unknown_driver_delivery_load_error";
+      driverDeliveries = {
+        ...defaultDriverDeliveriesViewModel(),
+        state: "error",
+        offerState: "error",
+        strikeState: "error",
+        error: `A sessão foi resolvida, mas o estado do entregador não pôde ser carregado. Diagnóstico: ${detail}`,
+        offerError: detail
+      };
+    }
+
+    return {
+      user: currentUser.user,
+      profile: currentUser.profile,
+      diagnostics: currentUser.diagnostics,
+      bonds: defaultBondLists(),
+      bondsState: "not-company",
+      bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+      invitations: {
+        invitations: [],
+        state: "not-company",
+        error: "Somente contas empresa podem gerar e listar convites."
+      },
+      retailerDeliveries: {
+        deliveries: [],
+        state: "not-retailer",
+        error: "Somente lojistas podem criar entregas pelo dashboard."
+      },
+      companyDeliveries: {
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: [],
+        state: "not-company",
+        error: "Somente contas empresa visualizam a fila operacional de entregas."
+      },
+      driverDeliveries
+    };
+  }
 
   if (!isCompany) {
     if (!isRetailer) {
@@ -350,6 +550,13 @@ export const getDashboardCompanyViewModel = async (
           waitingQueue: [],
           state: "not-company",
           error: "Somente contas empresa visualizam a fila operacional de entregas."
+        },
+        driverDeliveries: {
+          ...defaultDriverDeliveriesViewModel(),
+          state: "not-driver",
+          offerState: "not-driver",
+          strikeState: "not-driver",
+          error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
         }
       };
     }
@@ -420,6 +627,13 @@ export const getDashboardCompanyViewModel = async (
         waitingQueue: [],
         state: "not-company",
         error: "Somente contas empresa visualizam a fila operacional de entregas."
+      },
+      driverDeliveries: {
+        ...defaultDriverDeliveriesViewModel(),
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
       }
     };
   }
@@ -610,6 +824,13 @@ export const getDashboardCompanyViewModel = async (
       state: "not-retailer",
       error: "Somente lojistas podem criar entregas pelo dashboard."
     },
-    companyDeliveries
+    companyDeliveries,
+    driverDeliveries: {
+      ...defaultDriverDeliveriesViewModel(),
+      state: "not-driver",
+      offerState: "not-driver",
+      strikeState: "not-driver",
+      error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
+    }
   };
 };

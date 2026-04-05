@@ -307,14 +307,14 @@ const main = async () => {
       !deliveryRow ||
       deliveryRow.status !== "queued" ||
       attempts.length !== 2 ||
-      attempts.some((attempt) => attempt.status !== "expired") ||
+      attempts.some((attempt) => attempt.offerStatus !== "expired") ||
       events.map((event) => event.status).join(",") !== "created,queued,offered,failed_attempt,offered,failed_attempt,queued"
     ) {
       fail("db-evidence", {
         queuePhase: queueEntry?.phase ?? null,
         waitingReason: queueEntry?.waitingReason ?? null,
         deliveryStatus: deliveryRow?.status ?? null,
-        attempts: attempts.map((attempt) => ({ attemptNumber: attempt.attemptNumber, status: attempt.status })),
+        attempts: attempts.map((attempt) => ({ attemptNumber: attempt.attemptNumber, offerStatus: attempt.offerStatus })),
         eventStatuses: events.map((event) => event.status)
       });
     }

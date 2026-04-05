@@ -5,7 +5,7 @@ import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
-import { type CreateDeliveryInput, type TransitionDeliveryInput } from "@repo/shared";
+import { type CreateDeliveryInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
 import {
   getCurrentUser,
   getDashboardCompanyViewModel,
@@ -98,30 +98,6 @@ const registerPageOptionsForToken = async (token: string) => {
       inviteError: error instanceof Error ? error.message : "invitation_lookup_failed"
     };
   }
-};
-
-const renderRegisterError = (
-  response: import("node:http").ServerResponse,
-  options: Parameters<typeof RegisterPage>[0],
-  message: string,
-  statusCode = 400
-) => {
-  sendHtml(
-    response,
-    `<!DOCTYPE html><html><body>${RegisterPage({
-      ...options,
-      values: options?.values,
-      inviteToken: options?.inviteToken,
-      inviteStatus: options?.inviteStatus,
-      inviteCompanyName: options?.inviteCompanyName,
-      inviteCompanySlug: options?.inviteCompanySlug,
-      inviteError: options?.inviteError
-    }).replace(
-      "</main>",
-      `<div role=\"alert\" style=\"margin-top:16px;padding:12px;border-radius:10px;background:#fef2f2;color:#991b1b;\">${escapeHtml(message)}</div></main>`
-    )}</body></html>`,
-    statusCode
-  );
 };
 
 const rerenderDashboard = async (
@@ -368,6 +344,27 @@ export const server = createServer(async (request, response) => {
 
       await rerenderDashboard(response, request.headers.cookie ?? null, {
         createDelivery: createDeliveryInput
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/driver-offer") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const form = await parseBody(request);
+      const resolveOfferInput: ResolveDriverOfferInput = {
+        deliveryId: String(form.deliveryId ?? "").trim(),
+        decision: (String(form.decision ?? "reject").trim() === "accept" ? "accept" : "reject") as ResolveDriverOfferInput["decision"],
+        reason: normalizeMaybeNull(form.reason)
+      };
+
+      await rerenderDashboard(response, request.headers.cookie ?? null, {
+        resolveDriverOffer: resolveOfferInput
       });
       return;
     }

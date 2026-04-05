@@ -39,6 +39,18 @@ const waitingReasonCopy: Record<string, string> = {
   no_candidates_available: "Nenhum entregador elegível disponível"
 };
 
+const strikeConsequenceCopy: Record<string, string> = {
+  warning: "Advertência",
+  bond_suspended: "Vínculo suspenso",
+  bond_revoked: "Vínculo revogado"
+};
+
+const bondStatusCopy: Record<string, string> = {
+  active: "Ativo",
+  suspended: "Suspenso",
+  revoked: "Revogado"
+};
+
 const transitionOptions = [
   { value: "assigned", label: "Atribuir" },
   { value: "picked_up", label: "Coletar" },
@@ -126,7 +138,11 @@ const renderTimeline = (timeline: Array<{
     .join("")}</ol>`;
 };
 
-const renderDispatchDiagnostics = (delivery: DashboardCompanyViewModel["companyDeliveries"]["deliveries"][number]) => {
+const renderDispatchDiagnostics = (
+  delivery:
+    | DashboardCompanyViewModel["companyDeliveries"]["deliveries"][number]
+    | DashboardCompanyViewModel["driverDeliveries"]["deliveries"][number]
+) => {
   if (!delivery.dispatch) {
     return '<p data-testid="dispatch-diagnostics-empty">Sem estado explícito de dispatch para esta entrega.</p>';
   }
@@ -139,9 +155,10 @@ const renderDispatchDiagnostics = (delivery: DashboardCompanyViewModel["companyD
     <div>attempt ativa: <code data-testid="dispatch-active-attempt">${delivery.dispatch.activeAttemptNumber}</code></div>
     <div>deadline: <code data-testid="dispatch-deadline">${escapeHtml(formatDate(delivery.dispatch.deadlineAt))}</code></div>
     <div>waiting reason: <code data-testid="dispatch-waiting-reason">${escapeHtml(delivery.dispatch.waitingReason ? (waitingReasonCopy[delivery.dispatch.waitingReason] ?? delivery.dispatch.waitingReason) : "n/a")}</code></div>
-    <div>última tentativa: <code data-testid="dispatch-last-attempt">${lastAttempt ? `${lastAttempt.attemptNumber}:${lastAttempt.status}` : "n/a"}</code></div>
+    <div>última tentativa: <code data-testid="dispatch-last-attempt">${lastAttempt ? `${lastAttempt.attemptNumber}:${lastAttempt.offerStatus}` : "n/a"}</code></div>
     <div>último evento: <code data-testid="dispatch-last-event-at">${escapeHtml(formatDate(lastEvent?.createdAt))}</code></div>
     <div>snapshot candidatos: <code data-testid="dispatch-snapshot-count">${delivery.dispatch.latestSnapshot.length}</code></div>
+    <div>strikes: <code data-testid="dispatch-strike-count">${delivery.dispatch.strikes.length}</code></div>
   </div>`;
 };
 
@@ -181,14 +198,19 @@ const renderOperationalQueue = (
 };
 
 const renderDeliveryList = (
-  items: DashboardCompanyViewModel["companyDeliveries"]["deliveries"] | DashboardCompanyViewModel["retailerDeliveries"]["deliveries"],
-  mode: "company" | "retailer"
+  items:
+    | DashboardCompanyViewModel["companyDeliveries"]["deliveries"]
+    | DashboardCompanyViewModel["retailerDeliveries"]["deliveries"]
+    | DashboardCompanyViewModel["driverDeliveries"]["deliveries"],
+  mode: "company" | "retailer" | "driver"
 ) => {
   if (items.length === 0) {
     return `<p data-testid="${mode}-deliveries-empty">${escapeHtml(
       mode === "company"
         ? "Nenhuma entrega está na fila operacional desta empresa."
-        : "Nenhuma entrega criada por este lojista até agora."
+        : mode === "retailer"
+          ? "Nenhuma entrega criada por este lojista até agora."
+          : "Nenhuma entrega vinculada a este entregador até agora."
     )}</p>`;
   }
 
@@ -233,15 +255,95 @@ const renderDeliveryList = (
                 <button type="submit" data-testid="delivery-transition-submit">Atualizar entrega</button>
               </form>`
             : ""}
+          ${mode === "driver" && delivery.dispatch?.phase === "offered" && delivery.dispatch.activeAttemptId
+            ? `<form method="post" action="/dashboard/driver-offer" class="driver-offer-form" data-testid="driver-offer-form">
+                <input type="hidden" name="deliveryId" value="${escapeHtml(delivery.deliveryId)}" />
+                <label>Motivo da recusa (opcional)
+                  <input name="reason" placeholder="capacidade, distância, indisponibilidade" data-testid="driver-offer-reason-input" />
+                </label>
+                <div class="driver-offer-actions">
+                  <button type="submit" name="decision" value="accept" data-testid="driver-offer-accept-submit">Aceitar oferta</button>
+                  <button type="submit" name="decision" value="reject" data-testid="driver-offer-reject-submit">Recusar oferta</button>
+                </div>
+              </form>`
+            : ""}
           <section class="timeline-card">
             <h4>Timeline</h4>
             ${renderTimeline(delivery.timeline)}
           </section>
-          ${mode === "company" ? `<section class="timeline-card"><h4>Diagnóstico de dispatch</h4>${renderDispatchDiagnostics(delivery)}</section>` : ""}
+          ${mode !== "retailer" ? `<section class="timeline-card"><h4>Diagnóstico de dispatch</h4>${renderDispatchDiagnostics(delivery)}</section>` : ""}
         </article>
       </li>`
     )
     .join("")}</ul>`;
+};
+
+const renderDriverOfferCard = (viewModel: DashboardCompanyViewModel["driverDeliveries"]) => {
+  if (viewModel.offerState === "not-driver") {
+    return '<p data-testid="driver-offer-not-driver">Somente entregadores visualizam ofertas ativas.</p>';
+  }
+
+  if (viewModel.offerState === "error") {
+    return `<p role="alert" data-testid="driver-offer-error">${escapeHtml(viewModel.offerError ?? viewModel.error ?? "driver_offer_unavailable")}</p>`;
+  }
+
+  if (!viewModel.activeOffer) {
+    return '<p data-testid="driver-offer-empty">Nenhuma oferta ativa encontrada para este entregador.</p>';
+  }
+
+  const offer = viewModel.activeOffer;
+  return `<article class="delivery-card-inner" data-testid="driver-offer-card-${escapeHtml(offer.deliveryId)}">
+    <header class="delivery-header">
+      <div>
+        <strong>${escapeHtml(offer.externalReference ?? offer.deliveryId)}</strong>
+        <div>deliveryId: <code>${escapeHtml(offer.deliveryId)}</code></div>
+      </div>
+      <div><code data-testid="driver-offer-status">${escapeHtml(offer.status)}</code></div>
+    </header>
+    <div class="delivery-meta-grid">
+      <div>pickup: <code>${escapeHtml(offer.pickupAddress ?? "n/a")}</code></div>
+      <div>dropoff: <code>${escapeHtml(offer.dropoffAddress ?? "n/a")}</code></div>
+      <div>deadline: <code data-testid="driver-offer-deadline">${escapeHtml(formatDate(offer.dispatch?.deadlineAt))}</code></div>
+      <div>attempt: <code data-testid="driver-offer-attempt">${offer.dispatch?.activeAttemptNumber ?? 0}</code></div>
+    </div>
+    <div>phase: <code data-testid="driver-offer-phase">${escapeHtml(offer.dispatch?.phase ?? "n/a")}</code></div>
+    ${renderDispatchDiagnostics(offer)}
+    <form method="post" action="/dashboard/driver-offer" class="driver-offer-form" data-testid="driver-offer-form-inline">
+      <input type="hidden" name="deliveryId" value="${escapeHtml(offer.deliveryId)}" />
+      <label>Motivo da recusa (opcional)
+        <input name="reason" placeholder="capacidade, distância, indisponibilidade" data-testid="driver-offer-reason-input-inline" />
+      </label>
+      <div class="driver-offer-actions">
+        <button type="submit" name="decision" value="accept" data-testid="driver-offer-accept-submit-inline">Aceitar oferta</button>
+        <button type="submit" name="decision" value="reject" data-testid="driver-offer-reject-submit-inline">Recusar oferta</button>
+      </div>
+    </form>
+  </article>`;
+};
+
+const renderDriverStrikeCard = (viewModel: DashboardCompanyViewModel["driverDeliveries"]) => {
+  if (viewModel.strikeState === "not-driver") {
+    return '<p data-testid="driver-strike-not-driver">Somente entregadores visualizam o próprio histórico de strikes.</p>';
+  }
+
+  if (viewModel.strikeState === "error") {
+    return `<p role="alert" data-testid="driver-strike-error">${escapeHtml(viewModel.error ?? "driver_strike_unavailable")}</p>`;
+  }
+
+  if (!viewModel.strikeSummary || viewModel.strikeSummary.total === 0) {
+    return '<p data-testid="driver-strike-empty">Nenhum strike registrado para este entregador nesta empresa.</p>';
+  }
+
+  const { strikeSummary } = viewModel;
+  return `<div data-testid="driver-strike-summary">
+    <div>total: <code data-testid="driver-strike-total">${strikeSummary.total}</code></div>
+    <div>última consequência: <code data-testid="driver-strike-consequence">${escapeHtml(strikeConsequenceCopy[strikeSummary.activeConsequence ?? ""] ?? strikeSummary.activeConsequence ?? "n/a")}</code></div>
+    <div>status do vínculo: <code data-testid="driver-bond-status">${escapeHtml(bondStatusCopy[strikeSummary.bondStatus ?? ""] ?? strikeSummary.bondStatus ?? "n/a")}</code></div>
+    ${strikeSummary.lastStrike
+      ? `<div>último strike: <code data-testid="driver-strike-id">${escapeHtml(strikeSummary.lastStrike.strikeId)}</code></div>
+         <div>motivo: <code data-testid="driver-strike-reason">${escapeHtml(strikeSummary.lastStrike.reason)}</code></div>`
+      : ""}
+  </div>`;
 };
 
 export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!DOCTYPE html>
@@ -259,8 +361,9 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
       .bond-section, .delivery-section, .timeline-card { border: 1px solid #334155; border-radius: 12px; padding: 16px; background: rgba(2,6,23,.55); }
       .status-error { border-color: #ef4444; }
       .status-empty { border-color: #f59e0b; }
-      .invite-form, .delivery-form, .delivery-transition-form { display: grid; gap: 12px; margin-bottom: 16px; }
+      .invite-form, .delivery-form, .delivery-transition-form, .driver-offer-form { display: grid; gap: 12px; margin-bottom: 16px; }
       .invite-form-row, .delivery-form-row { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
+      .driver-offer-actions { display: flex; gap: 12px; flex-wrap: wrap; }
       label { display: grid; gap: 6px; }
       input, select, button { font: inherit; padding: 12px; border-radius: 10px; border: 1px solid #334155; background: #020617; color: #e2e8f0; }
       button { cursor: pointer; background: #2563eb; border-color: #2563eb; }
@@ -296,7 +399,39 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
           <li>invitationsState: <code data-testid="invitations-state">${escapeHtml(viewModel.invitations.state)}</code></li>
           <li>retailerDeliveriesState: <code data-testid="retailer-deliveries-state">${escapeHtml(viewModel.retailerDeliveries.state)}</code></li>
           <li>companyDeliveriesState: <code data-testid="company-deliveries-state">${escapeHtml(viewModel.companyDeliveries.state)}</code></li>
+          <li>driverDeliveriesState: <code data-testid="driver-deliveries-state">${escapeHtml(viewModel.driverDeliveries.state)}</code></li>
         </ul>
+      </section>
+      <section class="card ${viewModel.driverDeliveries.state === "error" ? "status-error" : viewModel.driverDeliveries.state === "empty" ? "status-empty" : ""}">
+        <h2>Resposta do entregador</h2>
+        <p>Visualize a oferta ativa, responda exatamente uma vez via SSR e acompanhe os strikes progressivos.</p>
+        ${viewModel.driverDeliveries.error ? `<p role="alert" data-testid="driver-deliveries-error">${escapeHtml(viewModel.driverDeliveries.error)}</p>` : ""}
+        ${viewModel.driverDeliveries.resolutionFeedback
+          ? `<div class="delivery-feedback" data-testid="driver-offer-feedback">
+              <strong>Oferta respondida</strong>
+              <div data-testid="driver-offer-feedback-message">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.message)}</div>
+              <div>deliveryId: <code data-testid="driver-offer-feedback-delivery-id">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.deliveryId)}</code></div>
+              <div>attemptId: <code data-testid="driver-offer-feedback-attempt-id">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.attemptId)}</code></div>
+              <div>queueEntryId: <code data-testid="driver-offer-feedback-queue-id">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.queueEntryId)}</code></div>
+              <div>resolution: <code data-testid="driver-offer-feedback-resolution">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.resolution)}</code></div>
+              <div>status: <code data-testid="driver-offer-feedback-status">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.status)}</code></div>
+              ${viewModel.driverDeliveries.resolutionFeedback.strike
+                ? `<div>strike: <code data-testid="driver-offer-feedback-strike">${escapeHtml(viewModel.driverDeliveries.resolutionFeedback.strike.consequence)}</code></div>`
+                : ""}
+            </div>`
+          : ""}
+        ${viewModel.driverDeliveries.state === "not-driver" ? '<p data-testid="driver-deliveries-not-driver">Somente entregadores visualizam ofertas e strikes próprios no dashboard.</p>' : ""}
+        <div class="delivery-grid">
+          <section class="delivery-section">
+            <h3>Oferta ativa</h3>
+            ${renderDriverOfferCard(viewModel.driverDeliveries)}
+          </section>
+          <section class="delivery-section">
+            <h3>Strikes e consequência</h3>
+            ${renderDriverStrikeCard(viewModel.driverDeliveries)}
+          </section>
+        </div>
+        ${renderDeliveryList(viewModel.driverDeliveries.deliveries, "driver")}
       </section>
       <section class="card ${viewModel.retailerDeliveries.state === "error" ? "status-error" : viewModel.retailerDeliveries.state === "empty" ? "status-empty" : ""}">
         <h2>Criação de entrega pelo lojista</h2>

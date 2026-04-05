@@ -174,6 +174,7 @@ describe("dashboard auth pages", () => {
               rankingVersion: "dispatch-v1",
               assumptions: ["queue uses active bond creation order until richer driver capacity signals arrive in S02/S03"],
               latestSnapshot: [],
+              strikes: [],
               attempts: [
                 {
                   attemptId: "550e8400-e29b-41d4-a716-446655440121",
@@ -181,9 +182,12 @@ describe("dashboard auth pages", () => {
                   companyId: "550e8400-e29b-41d4-a716-446655440000",
                   attemptNumber: 2,
                   driverId: "550e8400-e29b-41d4-a716-446655440008",
-                  status: "pending",
+                  offerStatus: "pending",
                   expiresAt: "2026-01-01T00:32:00.000Z",
                   resolvedAt: null,
+                  resolvedByActorType: null,
+                  resolvedByActorId: null,
+                  resolutionReason: null,
                   candidateSnapshot: null,
                   createdAt: "2026-01-01T00:30:00.000Z",
                   updatedAt: "2026-01-01T00:30:00.000Z"
@@ -237,6 +241,7 @@ describe("dashboard auth pages", () => {
               rankingVersion: "dispatch-v1",
               assumptions: [],
               latestSnapshot: [],
+              strikes: [],
               attempts: [
                 {
                   attemptId: "550e8400-e29b-41d4-a716-446655440132",
@@ -244,9 +249,12 @@ describe("dashboard auth pages", () => {
                   companyId: "550e8400-e29b-41d4-a716-446655440000",
                   attemptNumber: 2,
                   driverId: null,
-                  status: "expired",
+                  offerStatus: "expired",
                   expiresAt: "2026-01-01T00:39:00.000Z",
                   resolvedAt: "2026-01-01T00:40:00.000Z",
+                  resolvedByActorType: "system",
+                  resolvedByActorId: null,
+                  resolutionReason: "driver_offer_timeout",
                   candidateSnapshot: null,
                   createdAt: "2026-01-01T00:37:00.000Z",
                   updatedAt: "2026-01-01T00:40:00.000Z"
@@ -306,6 +314,7 @@ describe("dashboard auth pages", () => {
               rankingVersion: "dispatch-v1",
               assumptions: [],
               latestSnapshot: [],
+              strikes: [],
               attempts: [],
               createdAt: "2026-01-01T00:00:00.000Z",
               updatedAt: "2026-01-01T01:00:00.000Z"
@@ -347,6 +356,20 @@ describe("dashboard auth pages", () => {
             ]
           }
         ]
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
@@ -358,6 +381,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Convites de entregador");
     expect(html).toContain("Fila operacional da empresa");
     expect(html).toContain("Criação de entrega pelo lojista");
+    expect(html).toContain("Resposta do entregador");
     expect(html).toContain("Loja Centro");
     expect(html).toContain("Loja Norte");
     expect(html).toContain("Motorista Sul");
@@ -365,6 +389,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="invitations-state">loaded');
     expect(html).toContain('data-testid="company-deliveries-state">loaded');
     expect(html).toContain('data-testid="retailer-deliveries-state">not-retailer');
+    expect(html).toContain('data-testid="driver-deliveries-state">not-driver');
     expect(html).toContain('data-testid="generate-invitation-button"');
     expect(html).toContain('data-testid="generated-invitation"');
     expect(html).toContain('data-testid="generated-invite-url">http://localhost:3000/invite/generatedtoken123456');
@@ -373,6 +398,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="dispatch-waiting-list"');
     expect(html).toContain('data-testid="dispatch-phase">offered');
     expect(html).toContain('data-testid="dispatch-waiting-reason">Máximo de tentativas privadas atingido');
+    expect(html).toContain('data-testid="dispatch-last-attempt">2:expired');
     expect(html).toContain('data-testid="company-deliveries-list"');
     expect(html).toContain('data-testid="delivery-status-current">Em trânsito');
     expect(html).toContain('data-testid="delivery-transition-form"');
@@ -381,6 +407,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="delivery-event-status">Criada');
     expect(html).toContain('data-testid="delivery-event-status">Em trânsito');
     expect(html).toContain('data-testid="delivery-event-sequence">3');
+    expect(html).toContain('data-testid="driver-deliveries-not-driver"');
     expect(html).toContain("driver@sendro.test");
     expect(html).toContain("cus_123");
   });
@@ -421,6 +448,20 @@ describe("dashboard auth pages", () => {
         deliveries: [],
         activeQueue: [],
         waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
@@ -478,6 +519,20 @@ describe("dashboard auth pages", () => {
         deliveries: [],
         activeQueue: [],
         waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
@@ -566,6 +621,20 @@ describe("dashboard auth pages", () => {
         deliveries: [],
         activeQueue: [],
         waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
@@ -579,6 +648,266 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="delivery-timeline-list"');
     expect(html).toContain('data-testid="delivery-event-status">Criada');
     expect(html).toContain("deixar na portaria");
+  });
+
+  it("renders driver active offer, resolution feedback and strike progression SSR", () => {
+    const html = renderDashboardPage({
+      user: {
+        name: "Driver User",
+        email: "driver@sendro.test",
+        role: "driver"
+      },
+      profile: {
+        id: "550e8400-e29b-41d4-a716-446655440300",
+        name: "Motorista Sul",
+        stripeCustomerId: null
+      },
+      diagnostics: {
+        role: "driver",
+        profileCreated: true,
+        stripeStage: "created"
+      },
+      bondsState: "not-company",
+      bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+      bonds: {
+        activeRetailers: [],
+        pendingRetailers: [],
+        activeDrivers: []
+      },
+      invitations: {
+        state: "not-company",
+        error: "Somente contas empresa podem gerar e listar convites.",
+        invitations: []
+      },
+      retailerDeliveries: {
+        state: "not-retailer",
+        error: "Somente lojistas podem criar entregas pelo dashboard.",
+        deliveries: []
+      },
+      companyDeliveries: {
+        state: "not-company",
+        error: "Somente contas empresa visualizam a fila operacional de entregas.",
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "loaded",
+        offerState: "loaded",
+        strikeState: "loaded",
+        deliveries: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+            companyId: "550e8400-e29b-41d4-a716-446655440302",
+            retailerId: "550e8400-e29b-41d4-a716-446655440303",
+            driverId: "550e8400-e29b-41d4-a716-446655440300",
+            externalReference: "pedido-driver-1",
+            status: "offered",
+            pickupAddress: "Rua A, 10",
+            dropoffAddress: "Rua B, 20",
+            metadata: { notes: "campainha azul" },
+            createdAt: "2026-01-03T00:00:00.000Z",
+            updatedAt: "2026-01-03T00:01:00.000Z",
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655440304",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+              companyId: "550e8400-e29b-41d4-a716-446655440302",
+              phase: "offered",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 1,
+              activeAttemptId: "550e8400-e29b-41d4-a716-446655440305",
+              offeredDriverId: "550e8400-e29b-41d4-a716-446655440300",
+              offeredDriverName: "Motorista Sul",
+              offeredAt: "2026-01-03T00:01:00.000Z",
+              deadlineAt: "2026-01-03T00:03:00.000Z",
+              waitingReason: null,
+              waitingSince: null,
+              rankingVersion: "dispatch-v1",
+              assumptions: [],
+              latestSnapshot: [],
+              strikes: [
+                {
+                  strikeId: "550e8400-e29b-41d4-a716-446655440306",
+                  companyId: "550e8400-e29b-41d4-a716-446655440302",
+                  driverId: "550e8400-e29b-41d4-a716-446655440300",
+                  bondId: "550e8400-e29b-41d4-a716-446655440307",
+                  deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+                  dispatchAttemptId: "550e8400-e29b-41d4-a716-446655440305",
+                  attemptNumber: 1,
+                  reason: "driver_declined_capacity",
+                  consequence: "bond_suspended",
+                  metadata: { totalStrikes: 2 },
+                  createdAt: "2026-01-03T00:01:30.000Z"
+                }
+              ],
+              attempts: [
+                {
+                  attemptId: "550e8400-e29b-41d4-a716-446655440305",
+                  deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+                  companyId: "550e8400-e29b-41d4-a716-446655440302",
+                  attemptNumber: 1,
+                  driverId: "550e8400-e29b-41d4-a716-446655440300",
+                  offerStatus: "pending",
+                  expiresAt: "2026-01-03T00:03:00.000Z",
+                  resolvedAt: null,
+                  resolvedByActorType: null,
+                  resolvedByActorId: null,
+                  resolutionReason: null,
+                  candidateSnapshot: null,
+                  createdAt: "2026-01-03T00:01:00.000Z",
+                  updatedAt: "2026-01-03T00:01:00.000Z"
+                }
+              ],
+              createdAt: "2026-01-03T00:00:00.000Z",
+              updatedAt: "2026-01-03T00:01:00.000Z"
+            },
+            timeline: [
+              {
+                eventId: "550e8400-e29b-41d4-a716-446655440308",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+                status: "offered",
+                actorType: "system",
+                actorId: null,
+                actorLabel: "dispatch-engine",
+                sequence: 1,
+                metadata: {},
+                createdAt: "2026-01-03T00:01:00.000Z"
+              }
+            ]
+          }
+        ],
+        activeOffer: {
+          deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+          companyId: "550e8400-e29b-41d4-a716-446655440302",
+          retailerId: "550e8400-e29b-41d4-a716-446655440303",
+          driverId: "550e8400-e29b-41d4-a716-446655440300",
+          externalReference: "pedido-driver-1",
+          status: "offered",
+          pickupAddress: "Rua A, 10",
+          dropoffAddress: "Rua B, 20",
+          metadata: { notes: "campainha azul" },
+          createdAt: "2026-01-03T00:00:00.000Z",
+          updatedAt: "2026-01-03T00:01:00.000Z",
+          dispatch: {
+            queueEntryId: "550e8400-e29b-41d4-a716-446655440304",
+            deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+            companyId: "550e8400-e29b-41d4-a716-446655440302",
+            phase: "offered",
+            timeoutSeconds: 120,
+            activeAttemptNumber: 1,
+            activeAttemptId: "550e8400-e29b-41d4-a716-446655440305",
+            offeredDriverId: "550e8400-e29b-41d4-a716-446655440300",
+            offeredDriverName: "Motorista Sul",
+            offeredAt: "2026-01-03T00:01:00.000Z",
+            deadlineAt: "2026-01-03T00:03:00.000Z",
+            waitingReason: null,
+            waitingSince: null,
+            rankingVersion: "dispatch-v1",
+            assumptions: [],
+            latestSnapshot: [],
+            strikes: [
+              {
+                strikeId: "550e8400-e29b-41d4-a716-446655440306",
+                companyId: "550e8400-e29b-41d4-a716-446655440302",
+                driverId: "550e8400-e29b-41d4-a716-446655440300",
+                bondId: "550e8400-e29b-41d4-a716-446655440307",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+                dispatchAttemptId: "550e8400-e29b-41d4-a716-446655440305",
+                attemptNumber: 1,
+                reason: "driver_declined_capacity",
+                consequence: "bond_suspended",
+                metadata: { totalStrikes: 2 },
+                createdAt: "2026-01-03T00:01:30.000Z"
+              }
+            ],
+            attempts: [
+              {
+                attemptId: "550e8400-e29b-41d4-a716-446655440305",
+                deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+                companyId: "550e8400-e29b-41d4-a716-446655440302",
+                attemptNumber: 1,
+                driverId: "550e8400-e29b-41d4-a716-446655440300",
+                offerStatus: "pending",
+                expiresAt: "2026-01-03T00:03:00.000Z",
+                resolvedAt: null,
+                resolvedByActorType: null,
+                resolvedByActorId: null,
+                resolutionReason: null,
+                candidateSnapshot: null,
+                createdAt: "2026-01-03T00:01:00.000Z",
+                updatedAt: "2026-01-03T00:01:00.000Z"
+              }
+            ],
+            createdAt: "2026-01-03T00:00:00.000Z",
+            updatedAt: "2026-01-03T00:01:00.000Z"
+          },
+          timeline: [
+            {
+              eventId: "550e8400-e29b-41d4-a716-446655440308",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+              status: "offered",
+              actorType: "system",
+              actorId: null,
+              actorLabel: "dispatch-engine",
+              sequence: 1,
+              metadata: {},
+              createdAt: "2026-01-03T00:01:00.000Z"
+            }
+          ]
+        },
+        strikeSummary: {
+          total: 1,
+          lastStrike: {
+            strikeId: "550e8400-e29b-41d4-a716-446655440306",
+            companyId: "550e8400-e29b-41d4-a716-446655440302",
+            driverId: "550e8400-e29b-41d4-a716-446655440300",
+            bondId: "550e8400-e29b-41d4-a716-446655440307",
+            deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+            dispatchAttemptId: "550e8400-e29b-41d4-a716-446655440305",
+            attemptNumber: 1,
+            reason: "driver_declined_capacity",
+            consequence: "bond_suspended",
+            metadata: { totalStrikes: 2 },
+            createdAt: "2026-01-03T00:01:30.000Z"
+          },
+          activeConsequence: "bond_suspended",
+          bondStatus: "suspended"
+        },
+        resolutionFeedback: {
+          resolution: "rejected",
+          attemptId: "550e8400-e29b-41d4-a716-446655440305",
+          queueEntryId: "550e8400-e29b-41d4-a716-446655440304",
+          deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+          status: "queued",
+          strike: {
+            strikeId: "550e8400-e29b-41d4-a716-446655440306",
+            companyId: "550e8400-e29b-41d4-a716-446655440302",
+            driverId: "550e8400-e29b-41d4-a716-446655440300",
+            bondId: "550e8400-e29b-41d4-a716-446655440307",
+            deliveryId: "550e8400-e29b-41d4-a716-446655440301",
+            dispatchAttemptId: "550e8400-e29b-41d4-a716-446655440305",
+            attemptNumber: 1,
+            reason: "driver_declined_capacity",
+            consequence: "bond_suspended",
+            metadata: { totalStrikes: 2 },
+            createdAt: "2026-01-03T00:01:30.000Z"
+          },
+          message: "Oferta 550e8400-e29b-41d4-a716-446655440305 rejeitada para a entrega 550e8400-e29b-41d4-a716-446655440301."
+        }
+      }
+    });
+
+    expect(html).toContain('data-testid="driver-deliveries-state">loaded');
+    expect(html).toContain('data-testid="driver-offer-card-550e8400-e29b-41d4-a716-446655440301"');
+    expect(html).toContain('data-testid="driver-offer-form-inline"');
+    expect(html).toContain('data-testid="driver-offer-feedback"');
+    expect(html).toContain('data-testid="driver-offer-feedback-resolution">rejected');
+    expect(html).toContain('data-testid="driver-offer-feedback-strike">bond_suspended');
+    expect(html).toContain('data-testid="driver-strike-summary"');
+    expect(html).toContain('data-testid="driver-strike-total">1');
+    expect(html).toContain('data-testid="driver-bond-status">Suspenso');
+    expect(html).toContain('data-testid="driver-offer-deadline">2026-01-03T00:03:00.000Z');
+    expect(html).toContain('data-testid="dispatch-last-attempt">1:pending');
   });
 
   it("renders deterministic retailer bond-gate and non-company diagnostics", () => {
@@ -620,6 +949,20 @@ describe("dashboard auth pages", () => {
         deliveries: [],
         activeQueue: [],
         waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
@@ -627,6 +970,7 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="invitation-not-company"');
     expect(html).toContain('data-testid="retailer-deliveries-error"');
     expect(html).toContain('data-testid="company-deliveries-not-company"');
+    expect(html).toContain('data-testid="driver-deliveries-not-driver"');
     expect(html).toContain("Somente contas empresa visualizam vínculos da empresa no dashboard.");
     expect(html).toContain("Somente contas empresa podem gerar e listar convites.");
     expect(html).toContain("bond_active_required:retailer_company");

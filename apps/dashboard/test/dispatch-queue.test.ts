@@ -58,6 +58,7 @@ describe("dashboard dispatch queue SSR", () => {
               rankingVersion: "dispatch-v1",
               assumptions: [],
               latestSnapshot: [],
+              strikes: [],
               attempts: [
                 {
                   attemptId: "550e8400-e29b-41d4-a716-446655440111",
@@ -65,9 +66,12 @@ describe("dashboard dispatch queue SSR", () => {
                   companyId: "550e8400-e29b-41d4-a716-446655440000",
                   attemptNumber: 1,
                   driverId: null,
-                  status: "pending",
+                  offerStatus: "pending",
                   expiresAt: "2026-01-01T00:03:00.000Z",
                   resolvedAt: null,
+                  resolvedByActorType: null,
+                  resolvedByActorId: null,
+                  resolutionReason: null,
                   candidateSnapshot: null,
                   createdAt: "2026-01-01T00:01:00.000Z",
                   updatedAt: "2026-01-01T00:01:00.000Z"
@@ -121,6 +125,7 @@ describe("dashboard dispatch queue SSR", () => {
               rankingVersion: "dispatch-v1",
               assumptions: [],
               latestSnapshot: [],
+              strikes: [],
               attempts: [
                 {
                   attemptId: "550e8400-e29b-41d4-a716-446655440123",
@@ -128,9 +133,12 @@ describe("dashboard dispatch queue SSR", () => {
                   companyId: "550e8400-e29b-41d4-a716-446655440000",
                   attemptNumber: 2,
                   driverId: null,
-                  status: "expired",
+                  offerStatus: "expired",
                   expiresAt: "2026-01-01T00:03:30.000Z",
                   resolvedAt: "2026-01-01T00:04:00.000Z",
+                  resolvedByActorType: "system",
+                  resolvedByActorId: null,
+                  resolutionReason: "driver_offer_timeout",
                   candidateSnapshot: null,
                   createdAt: "2026-01-01T00:02:00.000Z",
                   updatedAt: "2026-01-01T00:04:00.000Z"
@@ -141,6 +149,20 @@ describe("dashboard dispatch queue SSR", () => {
             }
           }
         ]
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
@@ -150,7 +172,7 @@ describe("dashboard dispatch queue SSR", () => {
     expect(html).toContain('order-waiting');
     expect(html).toContain('data-testid="dispatch-active-attempt">1');
     expect(html).toContain('data-testid="dispatch-last-attempt">2:expired');
-    expect(html).toContain('Máximo de tentativas privadas atingido');
+    expect(html).toContain("Máximo de tentativas privadas atingido");
   });
 
   it("renders explicit empty and error states without collapsing them", () => {
@@ -170,6 +192,20 @@ describe("dashboard dispatch queue SSR", () => {
         deliveries: [],
         activeQueue: [],
         waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
       }
     });
 
