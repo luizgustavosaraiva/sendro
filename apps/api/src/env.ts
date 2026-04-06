@@ -23,7 +23,11 @@ const envSchema = z.object({
   STRIPE_API_KEY: z.string().min(1).optional(),
   EVOLUTION_API_URL: z.string().url().optional(),
   EVOLUTION_API_KEY: z.string().optional(),
-  OPENAI_API_KEY: z.string().optional()
+  OPENAI_API_KEY: z.string().optional(),
+  // LLM provider — defaults to OpenAI. Set LLM_BASE_URL to an OpenAI-compatible
+  // endpoint (e.g. http://localhost:11434/v1 for Ollama) to avoid real API costs.
+  LLM_BASE_URL: z.string().url().optional(),
+  LLM_MODEL: z.string().optional()
 });
 
 export const env = envSchema.parse(process.env);

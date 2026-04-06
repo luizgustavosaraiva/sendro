@@ -25,6 +25,7 @@ export const whatsappContactMappings = pgTable("whatsapp_contact_mappings", {
   companyId: uuid("company_id").notNull(),
   contactJid: varchar("contact_jid", { length: 128 }).notNull(),
   userId: text("user_id").notNull(),
+  role: varchar("role", { length: 16 }).notNull().default("retailer"),
   ...timestamps
 });
 

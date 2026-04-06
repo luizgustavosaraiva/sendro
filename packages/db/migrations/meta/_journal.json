@@ -43,6 +43,13 @@
       "when": 1744035600000,
       "tag": "0005_whatsapp_intake",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1744039200000,
+      "tag": "0006_whatsapp_contact_role",
+      "breakpoints": true
     }
   ]
 }

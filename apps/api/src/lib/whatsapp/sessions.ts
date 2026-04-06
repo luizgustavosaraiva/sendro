@@ -1,8 +1,9 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { assertDb } from "@repo/db";
-import { whatsappSessions } from "@repo/db/schema";
+import { whatsappContactMappings, whatsappSessions } from "@repo/db/schema";
 import type { WhatsAppProvider } from "@repo/shared";
 import type { WhatsAppSessionStatus } from "@repo/shared";
+import { processIntakeMessage } from "./intake";
 import { EvolutionGoAdapter } from "./evolution-go";
 import { env } from "../../env";
 
@@ -203,14 +204,34 @@ export async function handleConnectionUpdate({
   );
 }
 
+// ─── Placeholder driver handler (replaced in T02) ────────────────────────────
+
+export async function processDriverMessage(_params: {
+  instanceName: string;
+  companyId: string;
+  contactJid: string;
+  messageId: string;
+  messageText: string;
+  imageUrl?: string;
+  sendReply: (text: string) => Promise<void>;
+}): Promise<void> {
+  await _params.sendReply("Driver handler coming soon.");
+}
+
+// ─── Message routing ──────────────────────────────────────────────────────────
+
 export async function handleMessage({
   instanceName,
   from,
-  body
+  messageId,
+  body,
+  imageUrl
 }: {
   instanceName: string;
   from: string;
+  messageId: string;
   body?: string;
+  imageUrl?: string;
 }) {
   const { db } = assertDb();
   const rows = await db
@@ -229,13 +250,51 @@ export async function handleMessage({
     return;
   }
 
+  // Resolve contact role from whatsapp_contact_mappings
+  const mappingRows = await db
+    .select({ role: whatsappContactMappings.role })
+    .from(whatsappContactMappings)
+    .where(
+      and(
+        eq(whatsappContactMappings.companyId, session.companyId),
+        eq(whatsappContactMappings.contactJid, from)
+      )
+    )
+    .limit(1);
+
+  const role = mappingRows.length > 0 ? mappingRows[0].role : "retailer";
+
   const adapter = getAdapter();
-  try {
-    await adapter.sendText(instanceName, from, "Olá! Bot Sendro ativo.");
-  } catch (err) {
-    console.error(
-      `[WhatsApp] handleMessage sendText error instanceName=${instanceName} from=${from}`,
-      err
-    );
+  const sendReply = async (text: string) => {
+    try {
+      await adapter.sendText(instanceName, from, text);
+    } catch (err) {
+      console.error(
+        `[WhatsApp] handleMessage sendText error instanceName=${instanceName} from=${from}`,
+        err
+      );
+    }
+  };
+
+  if (role === "driver") {
+    await processDriverMessage({
+      instanceName,
+      companyId: session.companyId,
+      contactJid: from,
+      messageId,
+      messageText: body ?? "",
+      imageUrl,
+      sendReply
+    });
+  } else {
+    // Default: retailer intake flow
+    await processIntakeMessage({
+      db,
+      companyId: session.companyId,
+      contactJid: from,
+      messageId,
+      messageText: body ?? "",
+      sendReply
+    });
   }
 }

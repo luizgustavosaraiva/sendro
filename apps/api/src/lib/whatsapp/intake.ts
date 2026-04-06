@@ -29,13 +29,21 @@ const DeliveryFieldsSchema = z.object({
   externalReference: z.string().optional()
 });
 
-// ─── Real OpenAI extractor ────────────────────────────────────────────────────
+// ─── OpenAI-compatible extractor ─────────────────────────────────────────────
+// Works with OpenAI *and* any OpenAI-compatible endpoint (e.g. Ollama).
+// Set LLM_BASE_URL=http://localhost:11434/v1 + LLM_MODEL=gemma3:4b to run
+// locally via Ollama without spending real API credits.
 
-class OpenAIExtractor implements LLMExtractor {
+class OpenAICompatExtractor implements LLMExtractor {
   private apiKey: string;
+  private baseURL: string | undefined;
+  private model: string;
 
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
+  constructor(opts: { apiKey: string; baseURL?: string; model?: string }) {
+    this.apiKey = opts.apiKey;
+    this.baseURL = opts.baseURL;
+    // Default to gpt-4o-mini when talking to OpenAI, or use whatever model is configured.
+    this.model = opts.model ?? "gpt-4o-mini";
   }
 
   async extract(
@@ -43,12 +51,17 @@ class OpenAIExtractor implements LLMExtractor {
     existingFields: Partial<DeliveryFields>
   ): Promise<{ fields: Partial<DeliveryFields>; nextMessage: string }> {
     const { default: OpenAI } = await import("openai");
-    const { zodResponseFormat } = await import("openai/helpers/zod");
 
-    const client = new OpenAI({ apiKey: this.apiKey });
+    const client = new OpenAI({
+      apiKey: this.apiKey,
+      ...(this.baseURL ? { baseURL: this.baseURL } : {})
+    });
 
     const systemPrompt =
-      "Você é um assistente de logística. Extraia os campos de entrega da conversa do usuário: endereço de coleta, endereço de entrega, e referência externa (opcional). Responda em JSON estruturado.";
+      "Você é um assistente de logística. Extraia os campos de entrega da conversa do usuário: endereço de coleta, endereço de entrega, e referência externa (opcional). " +
+      "Responda APENAS com JSON válido no formato: " +
+      '{"pickupAddress":"...","dropoffAddress":"...","externalReference":"...","nextMessage":"..."}. ' +
+      "Os campos pickupAddress, dropoffAddress e externalReference são opcionais. nextMessage é obrigatório.";
 
     const userContent = messages.join("\n");
 
@@ -59,19 +72,47 @@ class OpenAIExtractor implements LLMExtractor {
       nextMessage: z.string()
     });
 
-    const response = await client.chat.completions.parse({
-      model: "gpt-4o-mini",
-      messages: [
-        { role: "system", content: systemPrompt },
-        {
-          role: "user",
-          content: `Contexto atual: ${JSON.stringify(existingFields)}\n\nMensagem: ${userContent}`
-        }
-      ],
-      response_format: zodResponseFormat(ExtractionSchema, "delivery_extraction")
-    });
+    // Ollama doesn't support response_format with zodResponseFormat structured output,
+    // so we use plain JSON mode when a custom baseURL is set, and parse manually.
+    let parsed: z.infer<typeof ExtractionSchema> | null = null;
 
-    const parsed = response.choices[0]?.message?.parsed;
+    if (this.baseURL) {
+      // Plain JSON mode — compatible with Ollama and other local providers
+      const response = await client.chat.completions.create({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Contexto atual: ${JSON.stringify(existingFields)}\n\nMensagem: ${userContent}`
+          }
+        ],
+        response_format: { type: "json_object" }
+      });
+
+      const raw = response.choices[0]?.message?.content ?? "{}";
+      try {
+        parsed = ExtractionSchema.parse(JSON.parse(raw));
+      } catch {
+        console.warn("[LLM] Failed to parse JSON response from local model:", raw);
+      }
+    } else {
+      // OpenAI structured output via zodResponseFormat
+      const { zodResponseFormat } = await import("openai/helpers/zod");
+      const response = await (client.chat.completions as any).parse({
+        model: this.model,
+        messages: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: `Contexto atual: ${JSON.stringify(existingFields)}\n\nMensagem: ${userContent}`
+          }
+        ],
+        response_format: zodResponseFormat(ExtractionSchema, "delivery_extraction")
+      });
+      parsed = response.choices[0]?.message?.parsed ?? null;
+    }
+
     if (!parsed) {
       return {
         fields: existingFields,
@@ -109,8 +150,18 @@ let _llmExtractor: LLMExtractor | null = null;
 
 export function getLLMExtractor(): LLMExtractor {
   if (!_llmExtractor) {
-    if (env.OPENAI_API_KEY) {
-      _llmExtractor = new OpenAIExtractor(env.OPENAI_API_KEY);
+    // LLM_BASE_URL allows pointing to any OpenAI-compatible server (e.g. Ollama).
+    // When LLM_BASE_URL is set and no OPENAI_API_KEY is provided, we use a dummy
+    // key — local providers like Ollama don't require a real key.
+    const hasKey = Boolean(env.OPENAI_API_KEY);
+    const hasLocalEndpoint = Boolean(env.LLM_BASE_URL);
+
+    if (hasKey || hasLocalEndpoint) {
+      _llmExtractor = new OpenAICompatExtractor({
+        apiKey: env.OPENAI_API_KEY ?? "ollama",
+        baseURL: env.LLM_BASE_URL,
+        model: env.LLM_MODEL
+      });
     } else {
       _llmExtractor = new StubExtractor();
     }

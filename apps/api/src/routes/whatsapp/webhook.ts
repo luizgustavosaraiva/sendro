@@ -36,9 +36,13 @@ export function registerWhatsAppWebhook(app: import("fastify").FastifyInstance) 
         const first = (messages[0] ?? {}) as Record<string, unknown>;
         const key = (first.key ?? {}) as Record<string, unknown>;
         const from = (key.remoteJid as string | undefined) ?? "";
+        const messageId = (key.id as string | undefined) ?? "";
         const message = (first.message ?? {}) as Record<string, unknown>;
-        const msgBody = message.conversation as string | undefined;
-        await handleMessage({ instanceName, from, body: msgBody });
+        const imageMessage = (message.imageMessage ?? {}) as Record<string, unknown>;
+        const msgBody =
+          (message.conversation as string | undefined) ??
+          (imageMessage.url as string | undefined);
+        await handleMessage({ instanceName, from, messageId, body: msgBody, imageUrl: imageMessage.url as string | undefined });
       } else {
         app.log.warn(
           { event: "webhook.whatsapp.unknown_type", instanceName, eventType },
