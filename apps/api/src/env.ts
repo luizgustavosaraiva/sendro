@@ -22,7 +22,8 @@ const envSchema = z.object({
   BETTER_AUTH_SECRET: z.string().min(1),
   STRIPE_API_KEY: z.string().min(1).optional(),
   EVOLUTION_API_URL: z.string().url().optional(),
-  EVOLUTION_API_KEY: z.string().optional()
+  EVOLUTION_API_KEY: z.string().optional(),
+  OPENAI_API_KEY: z.string().optional()
 });
 
 export const env = envSchema.parse(process.env);
