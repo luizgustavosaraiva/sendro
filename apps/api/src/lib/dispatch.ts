@@ -11,6 +11,7 @@ import {
   drivers,
   driverStrikes
 } from "@repo/db";
+import { notifyDriverOfferViaWhatsApp } from "./whatsapp/notifications";
 import type {
   DeliveryDispatchAttempt,
   DeliveryDispatchState,
@@ -1571,7 +1572,9 @@ export const createDelivery = async (input: {
 
   await assertRetailerHasActiveBond({ companyId: input.data.companyId, user: input.user });
 
-  return db.transaction(async (tx) => {
+  let offeredDriverId: string | null = null;
+
+  const result = await db.transaction(async (tx) => {
     const [created] = await tx
       .insert(deliveries)
       .values({
@@ -1597,7 +1600,8 @@ export const createDelivery = async (input: {
       }
     });
 
-    await initializeDispatchForDelivery({ tx, delivery: created });
+    const dispatchResult = await initializeDispatchForDelivery({ tx, delivery: created });
+    offeredDriverId = dispatchResult.queueEntry.offeredDriverId ?? null;
 
     const [delivery] = await tx.select().from(deliveries).where(eq(deliveries.id, created.id)).limit(1);
     const timelineRows = await tx
@@ -1623,6 +1627,26 @@ export const createDelivery = async (input: {
       queueEntry ? mapDispatchState(queueEntry, attempts, strikes) : null
     );
   });
+
+  // Post-transaction: notify the offered driver via WhatsApp (failure must not propagate)
+  if (offeredDriverId) {
+    const { db: dbInst } = assertDb();
+    const [driverRow] = await dbInst
+      .select({ userId: drivers.userId })
+      .from(drivers)
+      .where(eq(drivers.id, offeredDriverId))
+      .limit(1);
+
+    if (driverRow?.userId) {
+      await notifyDriverOfferViaWhatsApp({
+        companyId: input.data.companyId,
+        driverId: offeredDriverId,
+        userId: driverRow.userId
+      });
+    }
+  }
+
+  return result;
 };
 
 export const listDeliveries = async (input: {
