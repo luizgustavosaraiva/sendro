@@ -512,6 +512,10 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
   </head>
   <body>
     <main>
+      <nav style="margin-bottom:16px;display:flex;gap:12px;flex-wrap:wrap;">
+        <a href="/dashboard" style="color:#93c5fd;text-decoration:none;padding:8px 16px;border:1px solid #334155;border-radius:8px;" data-testid="nav-dashboard">📦 Entregas</a>
+        <a href="/dashboard/whatsapp" style="color:#93c5fd;text-decoration:none;padding:8px 16px;border:1px solid #334155;border-radius:8px;" data-testid="nav-whatsapp">📱 WhatsApp</a>
+      </nav>
       <section class="card">
         <h1>Dashboard autenticado</h1>
         <p>Usuário SSR resolvido com sucesso a partir da sessão Better Auth.</p>

@@ -15,7 +15,10 @@ import {
   transitionDeliverySchema,
   operationsSummarySchema,
   companyDriversOperationalListSchema,
+  connectResultSchema,
+  whatsappSessionStatusSchema,
   type CompanyDriverOperationalState,
+  type ConnectResult,
   type CreateDeliveryInput,
   type DeliveryCompletionInput,
   type DeliveryDetail,
@@ -26,7 +29,8 @@ import {
   type ReprocessDispatchTimeoutsResult,
   type ResolveDriverOfferInput,
   type ResolveDriverOfferResult,
-  type TransitionDeliveryInput
+  type TransitionDeliveryInput,
+  type WhatsAppSessionStatus
 } from "@repo/shared";
 import { buildApiUrl } from "./auth";
 import { env } from "./env";
@@ -987,4 +991,30 @@ export const getDashboardCompanyViewModel = async (
       error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
     }
   };
+};
+
+// ─── WhatsApp session view model ──────────────────────────────────────────────
+
+export const whatsappSessionViewModelSchema = z.object({
+  status: whatsappSessionStatusSchema,
+  qrCode: z.string().nullable(),
+  lastError: z.string().nullable().optional()
+});
+
+export type WhatsAppSessionViewModel = z.infer<typeof whatsappSessionViewModelSchema>;
+
+export const getWhatsAppSessionStatus = async (cookieHeader?: string | null): Promise<WhatsAppSessionViewModel | null> => {
+  const result = await fetchTrpc("whatsapp.sessionStatus", whatsappSessionViewModelSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const connectWhatsApp = async (cookieHeader?: string | null): Promise<ConnectResult | null> => {
+  const result = await postTrpc("whatsapp.connect", {}, connectResultSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const disconnectWhatsApp = async (cookieHeader?: string | null): Promise<{ status: WhatsAppSessionStatus } | null> => {
+  const disconnectResultSchema = z.object({ status: whatsappSessionStatusSchema });
+  const result = await postTrpc("whatsapp.disconnect", {}, disconnectResultSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
 };

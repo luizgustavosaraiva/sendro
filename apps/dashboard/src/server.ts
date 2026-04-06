@@ -3,6 +3,7 @@ import { parse as parseQuery } from "node:querystring";
 import LoginPage from "./app/(auth)/login/page";
 import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
+import { renderWhatsAppPage } from "./app/(app)/dashboard/whatsapp/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
 import { type CreateDeliveryInput, type DeliveryCompletionInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
@@ -10,7 +11,10 @@ import {
   getCurrentUser,
   getDashboardCompanyViewModel,
   lookupInvitationByToken,
-  redeemInvitationByToken
+  redeemInvitationByToken,
+  getWhatsAppSessionStatus,
+  connectWhatsApp,
+  disconnectWhatsApp
 } from "./lib/trpc";
 import { env } from "./lib/env";
 
@@ -422,6 +426,73 @@ export const server = createServer(async (request, response) => {
       }
 
       await rerenderDashboard(response, request.headers.cookie ?? null);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/dashboard/whatsapp") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const waSession = await getWhatsAppSessionStatus(request.headers.cookie ?? null);
+      sendHtml(response, renderWhatsAppPage({ session: waSession, userName: session.user.name }));
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/whatsapp/connect") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      try {
+        const result = await connectWhatsApp(request.headers.cookie ?? null);
+        if (!result) {
+          const waSession = await getWhatsAppSessionStatus(request.headers.cookie ?? null);
+          sendHtml(response, renderWhatsAppPage({ session: waSession, error: "Não foi possível conectar: sessão não autorizada." }));
+          return;
+        }
+        sendHtml(response, renderWhatsAppPage({
+          session: { status: result.status, qrCode: result.qrCode },
+          feedback: result.qrCode ? "QR code gerado. Escaneie com o WhatsApp." : "Conexão iniciada."
+        }));
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "whatsapp_connect_failed";
+        const waSession = await getWhatsAppSessionStatus(request.headers.cookie ?? null);
+        sendHtml(response, renderWhatsAppPage({ session: waSession, error: `Erro ao conectar: ${detail}` }));
+      }
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/whatsapp/disconnect") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      try {
+        const result = await disconnectWhatsApp(request.headers.cookie ?? null);
+        if (!result) {
+          const waSession = await getWhatsAppSessionStatus(request.headers.cookie ?? null);
+          sendHtml(response, renderWhatsAppPage({ session: waSession, error: "Não foi possível desconectar: sessão não autorizada." }));
+          return;
+        }
+        sendHtml(response, renderWhatsAppPage({
+          session: { status: result.status, qrCode: null },
+          feedback: "Instância desconectada com sucesso."
+        }));
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : "whatsapp_disconnect_failed";
+        const waSession = await getWhatsAppSessionStatus(request.headers.cookie ?? null);
+        sendHtml(response, renderWhatsAppPage({ session: waSession, error: `Erro ao desconectar: ${detail}` }));
+      }
       return;
     }
 
