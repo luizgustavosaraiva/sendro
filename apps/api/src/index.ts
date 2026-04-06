@@ -4,6 +4,8 @@ import { TRPCError } from "@trpc/server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { fromNodeHeaders } from "better-auth/node";
 import { assertDb } from "@repo/db";
+import { whatsappSessions } from "@repo/db/schema";
+import { eq } from "drizzle-orm";
 import { auth } from "./auth";
 import { env } from "./env";
 import { lookupInvitationByToken } from "./lib/invitations";
@@ -235,6 +237,28 @@ export const buildApp = async () => {
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  app.get("/health/whatsapp/:companyId", async (request, reply) => {
+    const { companyId } = request.params as { companyId: string };
+    const { db } = assertDb();
+    const rows = await db
+      .select()
+      .from(whatsappSessions)
+      .where(eq(whatsappSessions.companyId, companyId))
+      .limit(1);
+    if (rows.length === 0) {
+      return reply.status(404).send({ error: "session not found" });
+    }
+    const s = rows[0]!;
+    return {
+      status: s.status,
+      provider: s.provider,
+      lastError: s.lastError ?? null,
+      connectedAt: s.connectedAt ?? null,
+      disconnectedAt: s.disconnectedAt ?? null,
+      degraded: s.status !== "connected"
+    };
+  });
 
   registerWhatsAppWebhook(app);
 
