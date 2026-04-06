@@ -207,11 +207,11 @@ describe.skipIf(!process.env.DATABASE_URL)("whatsapp intake", () => {
     await processIntakeMessage(opts);
     await processIntakeMessage(opts); // second call with same messageId
 
-    const { eq } = await import("drizzle-orm");
+    const { eq, and: andOp } = await import("drizzle-orm");
     const deliveryRows = await db
       .select()
       .from(deliveries)
-      .where(eq(deliveries.pickupAddress, "Rua E, 500"));
+      .where(andOp(eq(deliveries.pickupAddress, "Rua E, 500"), eq(deliveries.companyId, company.id)));
 
     expect(deliveryRows.length).toBe(1); // only one delivery
     expect(localReplies.length).toBe(1); // reply sent only once
