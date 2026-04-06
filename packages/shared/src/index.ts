@@ -6,3 +6,4 @@ export * from "./schemas/auth";
 export * from "./schemas/bonds";
 export * from "./schemas/deliveries";
 export * from "./schemas/invitations";
+export * from "./whatsapp";

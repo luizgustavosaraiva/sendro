@@ -1,4 +1,5 @@
 import { relations, sql } from "drizzle-orm";
+export { whatsappSessions } from "./whatsapp";
 import {
   boolean,
   index,
@@ -546,6 +547,8 @@ export const deliveryEventsRelations = relations(deliveryEvents, ({ one }) => ({
   })
 }));
 
+import { whatsappSessions } from "./whatsapp";
+
 export const schema = {
   user: users,
   session: sessions,
@@ -578,7 +581,8 @@ export const schema = {
   dispatchQueueEntries,
   dispatchAttempts,
   driverStrikes,
-  deliveryEvents
+  deliveryEvents,
+  whatsappSessions
 };
 
 export type DatabaseSchema = typeof schema;
