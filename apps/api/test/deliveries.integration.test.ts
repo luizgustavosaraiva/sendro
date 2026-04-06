@@ -1,7 +1,22 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import request from "supertest";
-import { assertDb, bonds, deliveryEvents, deliveries, dispatchAttempts, dispatchQueueEntries, users } from "@repo/db";
+import {
+  assertDb,
+  bonds,
+  companies,
+  deliveryEvents,
+  deliveries,
+  dispatchAttempts,
+  dispatchQueueEntries,
+  users
+} from "@repo/db";
+import {
+  deliveryCompletionSchema,
+  deliveryDetailSchema,
+  deliveryProofSchema,
+  deliveryProofSubmissionSchema
+} from "@repo/shared";
 import { and, asc, eq } from "drizzle-orm";
 import { buildApp } from "../src/index";
 
@@ -365,4 +380,254 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       .where(and(eq(bonds.companyId, companyProfile.id), eq(bonds.entityId, retailerProfile.id)));
     expect(matchingBonds).toHaveLength(1);
   }, 30000);
+
+  it("completes an in-flight delivery atomically with proof snapshot and delivered event sequence", async () => {
+    const { db } = assertDb();
+    const suffix = Date.now() + 2;
+
+    const companyAgent = await registerAndLogin(app, {
+      role: "company",
+      name: "Company Proof Delivery",
+      email: `company.proof.delivery.${suffix}@sendro.test`,
+      companyName: "Company Proof Delivery"
+    });
+
+    const retailerAgent = await registerAndLogin(app, {
+      role: "retailer",
+      name: "Retailer Proof Delivery",
+      email: `retailer.proof.delivery.${suffix}@sendro.test`,
+      retailerName: "Retailer Proof Delivery"
+    });
+
+    const driverAgent = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Proof Delivery",
+      email: `driver.proof.delivery.${suffix}@sendro.test`,
+      driverName: "Driver Proof Delivery",
+      phone: `+5571${String(suffix).slice(-8)}`
+    });
+
+    const otherDriverAgent = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Proof Outsider",
+      email: `driver.proof.outsider.${suffix}@sendro.test`,
+      driverName: "Driver Proof Outsider",
+      phone: `+5572${String(suffix).slice(-8)}`
+    });
+
+    const companyProfile = trpcJson(await companyAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const retailerProfile = trpcJson(await retailerAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const driverProfile = trpcJson(await driverAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+
+    const [retailerUser] = await db.select().from(users).where(eq(users.email, `retailer.proof.delivery.${suffix}@sendro.test`)).limit(1);
+    expect(retailerUser).toBeTruthy();
+
+    await db
+      .update(companies)
+      .set({ proofRequiredNote: true, proofRequiredPhoto: true, updatedAt: new Date() })
+      .where(eq(companies.id, companyProfile.id));
+
+    await db.insert(bonds).values([
+      {
+        companyId: companyProfile.id,
+        entityId: retailerProfile.id,
+        entityType: "retailer",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: companyProfile.id,
+        entityId: driverProfile.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      }
+    ]);
+
+    const createResponse = await retailerAgent
+      .post("/trpc/deliveries.create")
+      .set("origin", "http://localhost:3000")
+      .send({
+        companyId: companyProfile.id,
+        externalReference: `POD-${suffix}`,
+        pickupAddress: "Rua Proof A, 10",
+        dropoffAddress: "Rua Proof B, 20"
+      });
+    expect(createResponse.status, createResponse.text).toBe(200);
+    const created = trpcJson(createResponse);
+
+    const acceptedResponse = await driverAgent
+      .post("/trpc/deliveries.resolveOffer")
+      .set("origin", "http://localhost:3000")
+      .send({ deliveryId: created.deliveryId, decision: "accept" });
+    expect(acceptedResponse.status, acceptedResponse.text).toBe(200);
+
+    const missingProofResponse = await driverAgent
+      .post("/trpc/deliveries.complete")
+      .set("origin", "http://localhost:3000")
+      .send({
+        deliveryId: created.deliveryId,
+        proof: {
+          note: "Recebido no balcão"
+        }
+      });
+    expect(missingProofResponse.status).toBe(400);
+    expect(trpcErrorMessage(missingProofResponse)).toContain("delivery_proof_photo_required");
+
+    const forbiddenResponse = await otherDriverAgent
+      .post("/trpc/deliveries.complete")
+      .set("origin", "http://localhost:3000")
+      .send({
+        deliveryId: created.deliveryId,
+        proof: {
+          note: "Entrega concluída",
+          photoUrl: "https://cdn.sendro.test/proofs/outsider.jpg"
+        }
+      });
+    expect(forbiddenResponse.status).toBe(403);
+    expect(trpcErrorMessage(forbiddenResponse)).toContain("delivery_driver_forbidden");
+
+    const completeResponse = await driverAgent
+      .post("/trpc/deliveries.complete")
+      .set("origin", "http://localhost:3000")
+      .send({
+        deliveryId: created.deliveryId,
+        proof: {
+          note: "Recebido na portaria.",
+          photoUrl: "https://cdn.sendro.test/proofs/pod-complete.jpg"
+        }
+      });
+    expect(completeResponse.status, completeResponse.text).toBe(200);
+    const completed = trpcJson(completeResponse);
+    expect(completed.status).toBe("delivered");
+    expect(completed.proof).toMatchObject({
+      note: "Recebido na portaria.",
+      photoUrl: "https://cdn.sendro.test/proofs/pod-complete.jpg",
+      submittedByActorType: "driver",
+      policy: {
+        requireNote: true,
+        requirePhoto: true
+      }
+    });
+    expect(completed.timeline.map((event: { status: string }) => event.status)).toEqual([
+      "created",
+      "queued",
+      "offered",
+      "accepted",
+      "delivered"
+    ]);
+
+    const duplicateCompletion = await driverAgent
+      .post("/trpc/deliveries.complete")
+      .set("origin", "http://localhost:3000")
+      .send({
+        deliveryId: created.deliveryId,
+        proof: {
+          note: "Recebido na portaria.",
+          photoUrl: "https://cdn.sendro.test/proofs/pod-complete.jpg"
+        }
+      });
+    expect(duplicateCompletion.status).toBe(409);
+    expect(trpcErrorMessage(duplicateCompletion)).toContain("delivery_already_delivered");
+
+    const driverListResponse = await driverAgent.get(listUrl()).set("origin", "http://localhost:3000");
+    expect(driverListResponse.status, driverListResponse.text).toBe(200);
+    const driverList = trpcJson(driverListResponse);
+    expect(driverList).toHaveLength(1);
+    expect(driverList[0].proof?.photoUrl).toBe("https://cdn.sendro.test/proofs/pod-complete.jpg");
+
+    const retailerDetailResponse = await retailerAgent.get(detailUrl(created.deliveryId)).set("origin", "http://localhost:3000");
+    expect(retailerDetailResponse.status, retailerDetailResponse.text).toBe(200);
+    expect(trpcJson(retailerDetailResponse).proof?.policy.requireNote).toBe(true);
+
+    const [storedDelivery] = await db.select().from(deliveries).where(eq(deliveries.id, created.deliveryId)).limit(1);
+    expect(storedDelivery?.status).toBe("delivered");
+    expect(storedDelivery?.proofNote).toBe("Recebido na portaria.");
+    expect(storedDelivery?.proofPhotoUrl).toBe("https://cdn.sendro.test/proofs/pod-complete.jpg");
+    expect(storedDelivery?.proofRequiredNote).toBe(true);
+    expect(storedDelivery?.proofRequiredPhoto).toBe(true);
+    expect(storedDelivery?.proofSubmittedByActorType).toBe("driver");
+
+    const storedEvents = await db
+      .select()
+      .from(deliveryEvents)
+      .where(eq(deliveryEvents.deliveryId, created.deliveryId))
+      .orderBy(asc(deliveryEvents.sequence));
+    expect(storedEvents.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
+    expect(storedEvents.at(-1)).toMatchObject({ status: "delivered", actorType: "driver", sequence: 5 });
+  }, 30000);
+
+  it("defines explicit proof-of-delivery validation and persistence fields without metadata blobs", async () => {
+    const deliveredAt = new Date().toISOString();
+
+    const parsedSubmission = deliveryProofSubmissionSchema.parse({
+      note: "Entrega recebida na portaria.",
+      photoUrl: "https://cdn.sendro.test/proofs/pod-123.jpg"
+    });
+    expect(parsedSubmission).toEqual({
+      note: "Entrega recebida na portaria.",
+      photoUrl: "https://cdn.sendro.test/proofs/pod-123.jpg"
+    });
+
+    const parsedCompletion = deliveryCompletionSchema.parse({
+      deliveryId: "550e8400-e29b-41d4-a716-446655440000",
+      proof: parsedSubmission
+    });
+    expect(parsedCompletion.proof.photoUrl).toBe("https://cdn.sendro.test/proofs/pod-123.jpg");
+
+    const malformedSubmission = deliveryProofSubmissionSchema.safeParse({
+      note: "Assinatura no balcão",
+      photoUrl: "not-a-url"
+    });
+    expect(malformedSubmission.success).toBe(false);
+
+    const parsedProof = deliveryProofSchema.parse({
+      deliveredAt,
+      note: "Cliente confirmou o recebimento.",
+      photoUrl: "https://cdn.sendro.test/proofs/pod-456.jpg",
+      submittedByActorType: "driver",
+      submittedByActorId: "driver-user-123",
+      policy: {
+        requireNote: true,
+        requirePhoto: true
+      }
+    });
+
+    const parsedDetail = deliveryDetailSchema.parse({
+      deliveryId: "550e8400-e29b-41d4-a716-446655440001",
+      companyId: "550e8400-e29b-41d4-a716-446655440002",
+      retailerId: "550e8400-e29b-41d4-a716-446655440003",
+      driverId: "550e8400-e29b-41d4-a716-446655440004",
+      externalReference: "ORDER-PROOF-1",
+      status: "delivered",
+      pickupAddress: "Rua A, 100",
+      dropoffAddress: "Rua B, 200",
+      metadata: { source: "proof-contract-test" },
+      proof: parsedProof,
+      createdAt: deliveredAt,
+      updatedAt: deliveredAt,
+      timeline: [],
+      dispatch: null
+    });
+    expect(parsedDetail.proof?.policy.requirePhoto).toBe(true);
+
+    const companyColumns = Object.keys(companies);
+    expect(companyColumns).toEqual(
+      expect.arrayContaining(["proofRequiredNote", "proofRequiredPhoto"])
+    );
+
+    const deliveryColumns = Object.keys(deliveries);
+    expect(deliveryColumns).toEqual(
+      expect.arrayContaining([
+        "deliveredAt",
+        "proofNote",
+        "proofPhotoUrl",
+        "proofRequiredNote",
+        "proofRequiredPhoto",
+        "proofSubmittedByActorType",
+        "proofSubmittedByActorId"
+      ])
+    );
+    expect(deliveryColumns).not.toContain("proofMetadata");
+  });
 });

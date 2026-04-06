@@ -45,6 +45,30 @@ export type DeliveryTimelineEvent = {
   createdAt: string;
 };
 
+export type DeliveryProofPolicy = {
+  requireNote: boolean;
+  requirePhoto: boolean;
+};
+
+export type DeliveryProof = {
+  deliveredAt: string;
+  note: string | null;
+  photoUrl: string | null;
+  submittedByActorType: DeliveryActorType;
+  submittedByActorId: string | null;
+  policy: DeliveryProofPolicy;
+};
+
+export type DeliveryProofSubmission = {
+  note?: string | null;
+  photoUrl?: string | null;
+};
+
+export type DeliveryCompletionInput = {
+  deliveryId: string;
+  proof: DeliveryProofSubmission;
+};
+
 export type DispatchRankingComponent = {
   signal: DispatchRankingSignal;
   value: number | string;
@@ -129,6 +153,7 @@ export type DeliveryListItem = {
   pickupAddress: string | null;
   dropoffAddress: string | null;
   metadata: Record<string, unknown>;
+  proof: DeliveryProof | null;
   createdAt: string;
   updatedAt: string;
   timeline: DeliveryTimelineEvent[];

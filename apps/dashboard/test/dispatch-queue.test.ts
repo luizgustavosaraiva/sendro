@@ -175,6 +175,127 @@ describe("dashboard dispatch queue SSR", () => {
     expect(html).toContain("Máximo de tentativas privadas atingido");
   });
 
+  it("renders proof-of-delivery details and completion actions without collapsing SSR state", () => {
+    const html = renderDashboardPage({
+      user: { name: "Ops Driver", email: "driver@sendro.test", role: "driver" },
+      profile: { id: "550e8400-e29b-41d4-a716-446655440000", name: "Ops Driver", stripeCustomerId: null },
+      diagnostics: { role: "driver", profileCreated: true, stripeStage: "created" },
+      bondsState: "not-company",
+      bonds: { activeRetailers: [], pendingRetailers: [], activeDrivers: [] },
+      invitations: { state: "not-company", invitations: [], error: "Somente contas empresa podem gerar e listar convites." },
+      retailerDeliveries: { state: "not-retailer", error: "Somente lojistas podem criar entregas pelo dashboard.", deliveries: [] },
+      companyDeliveries: {
+        state: "not-company",
+        error: "Somente contas empresa visualizam a fila operacional de entregas.",
+        deliveries: [],
+        activeQueue: [],
+        waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "loaded",
+        offerState: "empty",
+        strikeState: "empty",
+        deliveries: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440200",
+            companyId: "550e8400-e29b-41d4-a716-446655440201",
+            retailerId: "550e8400-e29b-41d4-a716-446655440202",
+            driverId: "550e8400-e29b-41d4-a716-446655440203",
+            externalReference: "order-proof",
+            status: "delivered",
+            pickupAddress: "Rua E",
+            dropoffAddress: "Rua F",
+            metadata: {},
+            proof: {
+              deliveredAt: "2026-01-01T00:05:00.000Z",
+              note: "Recebido pelo cliente.",
+              photoUrl: "https://cdn.sendro.test/proofs/order-proof.jpg",
+              submittedByActorType: "driver",
+              submittedByActorId: "user-driver",
+              policy: { requireNote: true, requirePhoto: true }
+            },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:05:00.000Z",
+            timeline: [],
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655440204",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440200",
+              companyId: "550e8400-e29b-41d4-a716-446655440201",
+              phase: "completed",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 1,
+              activeAttemptId: null,
+              offeredDriverId: "550e8400-e29b-41d4-a716-446655440203",
+              offeredDriverName: "Ops Driver",
+              offeredAt: "2026-01-01T00:01:00.000Z",
+              deadlineAt: null,
+              waitingReason: null,
+              waitingSince: null,
+              rankingVersion: "dispatch-v1",
+              assumptions: [],
+              latestSnapshot: [],
+              strikes: [],
+              attempts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:05:00.000Z"
+            }
+          },
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440210",
+            companyId: "550e8400-e29b-41d4-a716-446655440201",
+            retailerId: "550e8400-e29b-41d4-a716-446655440202",
+            driverId: "550e8400-e29b-41d4-a716-446655440203",
+            externalReference: "order-in-transit",
+            status: "in_transit",
+            pickupAddress: "Rua G",
+            dropoffAddress: "Rua H",
+            metadata: {},
+            proof: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:04:00.000Z",
+            timeline: [],
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655440211",
+              deliveryId: "550e8400-e29b-41d4-a716-446655440210",
+              companyId: "550e8400-e29b-41d4-a716-446655440201",
+              phase: "completed",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 1,
+              activeAttemptId: null,
+              offeredDriverId: "550e8400-e29b-41d4-a716-446655440203",
+              offeredDriverName: "Ops Driver",
+              offeredAt: "2026-01-01T00:01:00.000Z",
+              deadlineAt: null,
+              waitingReason: null,
+              waitingSince: null,
+              rankingVersion: "dispatch-v1",
+              assumptions: [],
+              latestSnapshot: [],
+              strikes: [],
+              attempts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:04:00.000Z"
+            }
+          }
+        ],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
+      }
+    });
+
+    expect(html).toContain('data-testid="delivery-proof"');
+    expect(html).toContain('Recebido pelo cliente.');
+    expect(html).toContain('https://cdn.sendro.test/proofs/order-proof.jpg');
+    expect(html).toContain('data-testid="delivery-proof-policy">note=true photo=true');
+    expect(html).toContain('data-testid="delivery-complete-form"');
+    expect(html).toContain('data-testid="delivery-complete-submit"');
+  });
+
   it("renders explicit empty and error states without collapsing them", () => {
     const html = renderDashboardPage({
       user: { name: "Ops Company", email: "ops@sendro.test", role: "company" },

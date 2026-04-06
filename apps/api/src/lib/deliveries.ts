@@ -1,3 +1,10 @@
-import { createDelivery, getDeliveryDetail, listDeliveries, transitionDelivery } from "./dispatch";
+import {
+  completeDelivery,
+  createDelivery,
+  getDeliveryDetail,
+  listDeliveries,
+  resolveDriverOffer,
+  transitionDelivery
+} from "./dispatch";
 
-export { createDelivery, getDeliveryDetail, listDeliveries, resolveDriverOffer, transitionDelivery };
+export { completeDelivery, createDelivery, getDeliveryDetail, listDeliveries, resolveDriverOffer, transitionDelivery };

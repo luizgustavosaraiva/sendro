@@ -5,7 +5,7 @@ import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
-import { type CreateDeliveryInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
+import { type CreateDeliveryInput, type DeliveryCompletionInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
 import {
   getCurrentUser,
   getDashboardCompanyViewModel,
@@ -386,6 +386,29 @@ export const server = createServer(async (request, response) => {
 
       await rerenderDashboard(response, request.headers.cookie ?? null, {
         transitionDelivery: transitionInput
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/deliveries/complete") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const form = await parseBody(request);
+      const completionInput: DeliveryCompletionInput = {
+        deliveryId: String(form.deliveryId ?? "").trim(),
+        proof: {
+          note: normalizeMaybeNull(form.proofNote),
+          photoUrl: normalizeMaybeNull(form.proofPhotoUrl)
+        }
+      };
+
+      await rerenderDashboard(response, request.headers.cookie ?? null, {
+        completeDelivery: completionInput
       });
       return;
     }

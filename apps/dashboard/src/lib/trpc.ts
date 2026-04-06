@@ -3,6 +3,7 @@ import {
   companyBondListsSchema,
   companyInvitationListSchema,
   createDeliverySchema,
+  deliveryCompletionSchema,
   deliveryDetailSchema,
   deliveryListSchema,
   dispatchQueueListSchema,
@@ -13,6 +14,7 @@ import {
   resolveDriverOfferSchema,
   transitionDeliverySchema,
   type CreateDeliveryInput,
+  type DeliveryCompletionInput,
   type DeliveryDetail,
   type DeliveryListItem,
   type DeliveryStatus,
@@ -80,7 +82,7 @@ export type PublicInvitationLookup = z.infer<typeof lookupInvitationResultSchema
 export type InvitationRedeemResult = z.infer<typeof redeemInvitationResultSchema>;
 
 type DashboardDeliveryMutationFeedback = {
-  kind: "created" | "transitioned";
+  kind: "created" | "transitioned" | "completed";
   deliveryId: string;
   status: DeliveryStatus;
   message: string;
@@ -138,6 +140,7 @@ export type DashboardCompanyDeliveriesViewModel = {
   queueError?: string;
   waitingError?: string;
   transitionFeedback?: DashboardDeliveryMutationFeedback;
+  completionFeedback?: DashboardDeliveryMutationFeedback;
   reprocessFeedback?: {
     message: string;
     result: ReprocessDispatchTimeoutsResult;
@@ -307,6 +310,12 @@ export const transitionCompanyDelivery = async (input: TransitionDeliveryInput, 
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const completeDeliveryWithProof = async (input: DeliveryCompletionInput, cookieHeader?: string | null) => {
+  const parsedInput = deliveryCompletionSchema.parse(input);
+  const result = await postTrpc("deliveries.complete", parsedInput, deliveryDetailSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 export const resolveDriverDeliveryOffer = async (input: ResolveDriverOfferInput, cookieHeader?: string | null) => {
   const parsedInput = resolveDriverOfferSchema.parse(input);
   const result = await postTrpc("deliveries.resolveOffer", parsedInput, resolveDriverOfferResultSchema, cookieHeader);
@@ -413,6 +422,7 @@ export const getDashboardCompanyViewModel = async (
     } | null;
     createDelivery?: CreateDeliveryInput | null;
     transitionDelivery?: TransitionDeliveryInput | null;
+    completeDelivery?: DeliveryCompletionInput | null;
     reprocessDispatch?: { nowIso?: string; companyId?: string } | null;
     resolveDriverOffer?: ResolveDriverOfferInput | null;
   }
@@ -455,6 +465,20 @@ export const getDashboardCompanyViewModel = async (
               resolved.resolution === "accepted"
                 ? `Oferta ${resolved.attemptId} aceita e entrega ${resolved.delivery.deliveryId} atualizada para ${resolved.delivery.status}.`
                 : `Oferta ${resolved.attemptId} rejeitada para a entrega ${resolved.delivery.deliveryId}.`
+          };
+        }
+      }
+
+      if (driverDeliveries.state !== "error" && options?.completeDelivery) {
+        const completed = await completeDeliveryWithProof(options.completeDelivery, cookieHeader);
+        if (!completed) {
+          driverDeliveries = {
+            ...defaultDriverDeliveriesViewModel(),
+            state: "error",
+            offerState: "error",
+            strikeState: "error",
+            error: "A sessão foi resolvida, mas a prova de entrega não pôde ser enviada porque a autenticação SSR não foi aceita pela API.",
+            offerError: "delivery_completion_unauthorized"
           };
         }
       }
@@ -708,6 +732,7 @@ export const getDashboardCompanyViewModel = async (
 
   try {
     let transitionFeedback: DashboardCompanyDeliveriesViewModel["transitionFeedback"];
+    let completionFeedback: DashboardCompanyDeliveriesViewModel["completionFeedback"];
     let reprocessFeedback: DashboardCompanyDeliveriesViewModel["reprocessFeedback"];
     let transitionedDetail: DeliveryDetail | undefined;
 
@@ -728,6 +753,27 @@ export const getDashboardCompanyViewModel = async (
           deliveryId: transitioned.deliveryId,
           status: transitioned.status,
           message: `Entrega ${transitioned.deliveryId} atualizada para ${transitioned.status}.`
+        };
+      }
+    }
+
+    if (companyDeliveries.state !== "error" && options?.completeDelivery) {
+      const completed = await completeDeliveryWithProof(options.completeDelivery, cookieHeader);
+      if (!completed) {
+        companyDeliveries = {
+          deliveries: [],
+          activeQueue: [],
+          waitingQueue: [],
+          state: "error",
+          error: "A sessão foi resolvida, mas a conclusão com prova não pôde ser executada porque a autenticação SSR não foi aceita pela API."
+        };
+      } else {
+        transitionedDetail = completed;
+        completionFeedback = {
+          kind: "completed",
+          deliveryId: completed.deliveryId,
+          status: completed.status,
+          message: `Entrega ${completed.deliveryId} concluída com prova em ${completed.proof?.deliveredAt ?? completed.updatedAt}.`
         };
       }
     }
@@ -782,6 +828,7 @@ export const getDashboardCompanyViewModel = async (
           queueError: !activeQueueRows ? "dispatch_queue_unavailable" : undefined,
           waitingError: !waitingQueueRows ? "waiting_queue_unavailable" : undefined,
           transitionFeedback,
+          completionFeedback,
           reprocessFeedback
         };
       } else {
@@ -796,6 +843,7 @@ export const getDashboardCompanyViewModel = async (
           waitingQueue: waitingRows,
           state,
           transitionFeedback,
+          completionFeedback,
           reprocessFeedback
         };
       }

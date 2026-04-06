@@ -50,6 +50,33 @@ export const resolveDriverOfferSchema = z.object({
   metadata: deliveryMetadataSchema.optional()
 });
 
+export const deliveryProofPolicySchema = z.object({
+  requireNote: z.boolean(),
+  requirePhoto: z.boolean()
+});
+
+const deliveryProofNoteSchema = z.string().trim().min(1).max(2000);
+const deliveryProofPhotoUrlSchema = z.string().trim().url().max(2000);
+
+export const deliveryProofSchema = z.object({
+  deliveredAt: z.string().datetime(),
+  note: deliveryProofNoteSchema.nullable(),
+  photoUrl: deliveryProofPhotoUrlSchema.nullable(),
+  submittedByActorType: deliveryActorTypeSchema,
+  submittedByActorId: z.string().nullable(),
+  policy: deliveryProofPolicySchema
+});
+
+export const deliveryProofSubmissionSchema = z.object({
+  note: deliveryProofNoteSchema.optional().nullable(),
+  photoUrl: deliveryProofPhotoUrlSchema.optional().nullable()
+});
+
+export const deliveryCompletionSchema = z.object({
+  deliveryId: z.string().uuid(),
+  proof: deliveryProofSubmissionSchema
+});
+
 export const dispatchQueueFiltersSchema = z.object({
   phase: z.enum(["queued", "offered"]).optional()
 });
@@ -149,6 +176,8 @@ export const deliveryDispatchStateSchema = z.object({
   updatedAt: z.string()
 });
 
+const deliveryProofFieldSchema = z.preprocess((value) => (value === undefined ? null : value), deliveryProofSchema.nullable());
+
 export const deliveryListItemSchema = z.object({
   deliveryId: z.string().uuid(),
   companyId: z.string().uuid(),
@@ -159,6 +188,7 @@ export const deliveryListItemSchema = z.object({
   pickupAddress: z.string().nullable(),
   dropoffAddress: z.string().nullable(),
   metadata: deliveryMetadataSchema,
+  proof: deliveryProofFieldSchema,
   createdAt: z.string(),
   updatedAt: z.string(),
   timeline: z.array(deliveryTimelineEventSchema),

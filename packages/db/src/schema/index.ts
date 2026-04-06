@@ -134,6 +134,8 @@ export const companies = pgTable(
     slug: varchar("slug", { length: 120 }).notNull(),
     lifecycle: companyLifecycleEnum("lifecycle").default("onboarding").notNull(),
     stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+    proofRequiredNote: boolean("proof_required_note").default(false).notNull(),
+    proofRequiredPhoto: boolean("proof_required_photo").default(false).notNull(),
     ...timestamps
   },
   (table) => ({
@@ -238,12 +240,20 @@ export const deliveries = pgTable(
     pickupAddress: text("pickup_address"),
     dropoffAddress: text("dropoff_address"),
     metadata: jsonb("metadata").default(sql`'{}'::jsonb`).notNull(),
+    deliveredAt: timestamp("delivered_at", { withTimezone: true }),
+    proofNote: text("proof_note"),
+    proofPhotoUrl: text("proof_photo_url"),
+    proofRequiredNote: boolean("proof_required_note"),
+    proofRequiredPhoto: boolean("proof_required_photo"),
+    proofSubmittedByActorType: deliveryActorTypeEnum("proof_submitted_by_actor_type"),
+    proofSubmittedByActorId: text("proof_submitted_by_actor_id"),
     ...timestamps
   },
   (table) => ({
     companyStatusIdx: index("deliveries_company_status_idx").on(table.companyId, table.status),
     retailerIdx: index("deliveries_retailer_idx").on(table.retailerId),
-    driverIdx: index("deliveries_driver_idx").on(table.driverId)
+    driverIdx: index("deliveries_driver_idx").on(table.driverId),
+    deliveredAtIdx: index("deliveries_delivered_at_idx").on(table.companyId, table.deliveredAt)
   })
 );
 

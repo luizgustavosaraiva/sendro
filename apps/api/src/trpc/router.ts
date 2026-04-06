@@ -6,6 +6,7 @@ import {
   companyInvitationListSchema,
   createDeliverySchema,
   createInvitationSchema,
+  deliveryCompletionSchema,
   deliveryDetailSchema,
   deliveryListSchema,
   dispatchQueueFiltersSchema,
@@ -34,6 +35,7 @@ import {
   requestRetailerBond
 } from "../lib/bonds";
 import {
+  completeDelivery,
   createDelivery,
   getDeliveryDetail,
   listDeliveries,
@@ -128,6 +130,10 @@ export const appRouter = router({
       .input(resolveDriverOfferSchema)
       .output(resolveDriverOfferResultSchema)
       .mutation(async ({ ctx, input }) => resolveDriverOffer({ user: ctx.session.user as never, data: input })),
+    complete: protectedProcedure
+      .input(deliveryCompletionSchema)
+      .output(deliveryDetailSchema)
+      .mutation(async ({ ctx, input }) => completeDelivery({ user: ctx.session.user as never, data: input })),
     transition: protectedProcedure
       .input(transitionDeliverySchema)
       .output(deliveryDetailSchema)

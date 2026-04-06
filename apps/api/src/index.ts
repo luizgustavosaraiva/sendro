@@ -64,7 +64,12 @@ const ensureDispatchSchemaForTests = async () => {
       try {
         await client.query(`
           do $$ begin
-            if not exists (select 1 from pg_type where typname = 'dispatch_phase') then
+            if not exists (
+              select 1
+              from pg_type t
+              join pg_namespace n on n.oid = t.typnamespace
+              where t.typname = 'dispatch_phase' and n.nspname = 'public'
+            ) then
               create type dispatch_phase as enum ('queued', 'offered', 'waiting', 'completed');
             end if;
           end $$;
@@ -72,7 +77,12 @@ const ensureDispatchSchemaForTests = async () => {
 
         await client.query(`
           do $$ begin
-            if not exists (select 1 from pg_type where typname = 'dispatch_attempt_status') then
+            if not exists (
+              select 1
+              from pg_type t
+              join pg_namespace n on n.oid = t.typnamespace
+              where t.typname = 'dispatch_attempt_status' and n.nspname = 'public'
+            ) then
               create type dispatch_attempt_status as enum ('pending', 'expired', 'accepted', 'cancelled');
             end if;
           end $$;
@@ -80,7 +90,12 @@ const ensureDispatchSchemaForTests = async () => {
 
         await client.query(`
           do $$ begin
-            if not exists (select 1 from pg_type where typname = 'dispatch_waiting_reason') then
+            if not exists (
+              select 1
+              from pg_type t
+              join pg_namespace n on n.oid = t.typnamespace
+              where t.typname = 'dispatch_waiting_reason' and n.nspname = 'public'
+            ) then
               create type dispatch_waiting_reason as enum ('max_private_attempts_reached', 'no_candidates_available');
             end if;
           end $$;
@@ -113,25 +128,56 @@ const ensureDispatchSchemaForTests = async () => {
         await client.query("create index if not exists dispatch_queue_entries_company_phase_deadline_idx on dispatch_queue_entries (company_id, phase, deadline_at)");
 
         await client.query(`
-          create table if not exists dispatch_attempts (
-            id uuid primary key default gen_random_uuid() not null,
-            delivery_id uuid not null references deliveries(id) on delete cascade,
-            queue_entry_id uuid not null references dispatch_queue_entries(id) on delete cascade,
-            company_id uuid not null references companies(id) on delete cascade,
-            attempt_number integer not null,
-            driver_id uuid references drivers(id) on delete set null,
-            status dispatch_attempt_status default 'pending' not null,
-            expires_at timestamp with time zone not null,
-            resolved_at timestamp with time zone,
-            candidate_snapshot jsonb default null,
-            created_at timestamp with time zone default now() not null,
-            updated_at timestamp with time zone default now() not null,
-            constraint dispatch_attempts_delivery_attempt_unique unique (delivery_id, attempt_number)
-          )
+          do $$ begin
+            if not exists (
+              select 1
+              from information_schema.columns
+              where table_schema = 'public'
+                and table_name = 'dispatch_attempts'
+                and column_name = 'offer_status'
+            ) then
+              create table if not exists dispatch_attempts (
+                id uuid primary key default gen_random_uuid() not null,
+                delivery_id uuid not null references deliveries(id) on delete cascade,
+                queue_entry_id uuid not null references dispatch_queue_entries(id) on delete cascade,
+                company_id uuid not null references companies(id) on delete cascade,
+                attempt_number integer not null,
+                driver_id uuid references drivers(id) on delete set null,
+                status dispatch_attempt_status default 'pending' not null,
+                expires_at timestamp with time zone not null,
+                resolved_at timestamp with time zone,
+                candidate_snapshot jsonb default null,
+                created_at timestamp with time zone default now() not null,
+                updated_at timestamp with time zone default now() not null,
+                constraint dispatch_attempts_delivery_attempt_unique unique (delivery_id, attempt_number)
+              );
+            end if;
+          end $$;
         `);
 
-        await client.query("create index if not exists dispatch_attempts_queue_status_deadline_idx on dispatch_attempts (queue_entry_id, status, expires_at)");
-        await client.query("create index if not exists dispatch_attempts_company_status_deadline_idx on dispatch_attempts (company_id, status, expires_at)");
+        await client.query(`
+          do $$ begin
+            if exists (
+              select 1
+              from information_schema.columns
+              where table_schema = 'public'
+                and table_name = 'dispatch_attempts'
+                and column_name = 'status'
+            ) then
+              create index if not exists dispatch_attempts_queue_status_deadline_idx on dispatch_attempts (queue_entry_id, status, expires_at);
+              create index if not exists dispatch_attempts_company_status_deadline_idx on dispatch_attempts (company_id, status, expires_at);
+            elsif exists (
+              select 1
+              from information_schema.columns
+              where table_schema = 'public'
+                and table_name = 'dispatch_attempts'
+                and column_name = 'offer_status'
+            ) then
+              create index if not exists dispatch_attempts_queue_status_deadline_idx on dispatch_attempts (queue_entry_id, offer_status, expires_at);
+              create index if not exists dispatch_attempts_company_status_deadline_idx on dispatch_attempts (company_id, offer_status, expires_at);
+            end if;
+          end $$;
+        `);
       } finally {
         client.release();
       }

@@ -16,6 +16,7 @@ CREATE TABLE "driver_strikes" (
 );
 --> statement-breakpoint
 ALTER TABLE "dispatch_attempts" RENAME COLUMN "status" TO "offer_status";--> statement-breakpoint
+ALTER TABLE "dispatch_attempts" ALTER COLUMN "offer_status" DROP DEFAULT;--> statement-breakpoint
 ALTER TABLE "dispatch_attempts" ALTER COLUMN "offer_status" TYPE "public"."driver_offer_status" USING "offer_status"::text::"public"."driver_offer_status";--> statement-breakpoint
 ALTER TABLE "dispatch_attempts" ALTER COLUMN "offer_status" SET DEFAULT 'pending';--> statement-breakpoint
 ALTER TABLE "dispatch_attempts" ADD COLUMN "resolved_by_actor_type" "public"."delivery_actor_type";--> statement-breakpoint

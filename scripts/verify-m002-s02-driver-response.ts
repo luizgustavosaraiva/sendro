@@ -133,6 +133,12 @@ const canReuseDashboard = async () => {
 const execFileAsync = promisify(execFile);
 
 const applyLocalMigrations = async () => {
+  await execFileAsync("C:/ProgramData/chocolatey/bin/pnpm", ["tsx", "scripts/repair-local-drizzle-state.ts"], {
+    cwd: process.cwd(),
+    env: process.env,
+    windowsHide: true
+  });
+
   await execFileAsync("C:/ProgramData/chocolatey/bin/pnpm", ["--filter", "@repo/db", "db:migrate"], {
     cwd: process.cwd(),
     env: process.env,
@@ -381,20 +387,23 @@ const main = async () => {
       dispatch: {
         phase: string;
         waitingReason: string | null;
+        offeredDriverId: string | null;
         strikes: Array<{ consequence: string; reason: string }>;
         attempts: Array<{ offerStatus: string; resolvedByActorType: string | null; resolutionReason: string | null }>;
       } | null;
       timeline: Array<{ status: string; actorType: string; sequence: number }>;
     };
     if (
-      rejectedDetail.status !== "queued" ||
-      rejectedDetail.dispatch?.phase !== "waiting" ||
-      rejectedDetail.dispatch?.waitingReason !== "no_candidates_available" ||
+      rejectedDetail.status !== "offered" ||
+      rejectedDetail.dispatch?.phase !== "offered" ||
+      rejectedDetail.dispatch?.waitingReason !== null ||
+      rejectedDetail.dispatch?.offeredDriverId !== driverBProfile.profile.id ||
       rejectedDetail.dispatch?.attempts[0]?.offerStatus !== "rejected" ||
       rejectedDetail.dispatch?.attempts[0]?.resolvedByActorType !== "driver" ||
       rejectedDetail.dispatch?.attempts[0]?.resolutionReason !== "driver_declined_capacity" ||
+      rejectedDetail.dispatch?.attempts[1]?.offerStatus !== "pending" ||
       rejectedDetail.dispatch?.strikes[0]?.consequence !== "warning" ||
-      rejectedDetail.timeline.map((event) => event.status).join(",") !== "created,queued,offered,failed_attempt,queued"
+      rejectedDetail.timeline.map((event) => event.status).join(",") !== "created,queued,offered,failed_attempt,offered"
     ) {
       fail("driver-reject", { rejectedDetail });
     }
@@ -442,14 +451,16 @@ const main = async () => {
       !acceptedQueueEntry ||
       acceptedQueueEntry.phase !== "completed" ||
       !rejectedQueueEntry ||
-      rejectedQueueEntry.phase !== "waiting" ||
-      rejectedQueueEntry.waitingReason !== "no_candidates_available" ||
+      rejectedQueueEntry.phase !== "offered" ||
+      rejectedQueueEntry.waitingReason !== null ||
+      rejectedQueueEntry.offeredDriverId !== driverBProfile.profile.id ||
       !acceptedDelivery ||
       acceptedDelivery.status !== "accepted" ||
       !rejectedDelivery ||
-      rejectedDelivery.status !== "queued" ||
+      rejectedDelivery.status !== "offered" ||
       acceptedAttempts[0]?.offerStatus !== "accepted" ||
       rejectedAttempts[0]?.offerStatus !== "rejected" ||
+      rejectedAttempts[1]?.offerStatus !== "pending" ||
       acceptedEvents.map((event) => event.sequence).join(",") !== "1,2,3,4" ||
       rejectedEvents.map((event) => event.sequence).join(",") !== "1,2,3,4,5" ||
       acceptedEvents[3]?.actorType !== "driver" ||
@@ -461,6 +472,7 @@ const main = async () => {
         acceptedQueuePhase: acceptedQueueEntry?.phase ?? null,
         rejectedQueuePhase: rejectedQueueEntry?.phase ?? null,
         rejectedWaitingReason: rejectedQueueEntry?.waitingReason ?? null,
+        rejectedOfferedDriverId: rejectedQueueEntry?.offeredDriverId ?? null,
         acceptedStatus: acceptedDelivery?.status ?? null,
         rejectedStatus: rejectedDelivery?.status ?? null,
         acceptedAttempts: acceptedAttempts.map((attempt) => ({ offerStatus: attempt.offerStatus, actor: attempt.resolvedByActorType })),

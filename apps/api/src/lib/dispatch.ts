@@ -1,7 +1,8 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
 import {
   assertDb,
+  companies,
   bonds,
   deliveryEvents,
   deliveries,
@@ -13,8 +14,10 @@ import {
 import type {
   DeliveryDispatchAttempt,
   DeliveryDispatchState,
+  DeliveryCompletionInput,
   DeliveryDetail,
   DeliveryListItem,
+  DeliveryProof,
   DeliveryStatus,
   DeliveryTimelineEvent,
   DispatchCandidateSnapshot,
@@ -124,6 +127,7 @@ const asCandidateSnapshot = (value: unknown): DispatchCandidateSnapshot | null =
 };
 
 const deliveryError = (code: TRPCError["code"], message: string) => new TRPCError({ code, message });
+const DELIVERABLE_PROOF_STATUSES: DeliveryStatus[] = ["accepted", "picked_up", "in_transit"];
 
 const allowedTransitions: Record<DeliveryStatus, Array<"assigned" | "picked_up" | "in_transit">> = {
   created: ["assigned"],
@@ -208,6 +212,24 @@ const mapDispatchState = (
   updatedAt: toIso(queueEntry.updatedAt)
 });
 
+const mapDeliveryProof = (delivery: DeliveryRecord): DeliveryProof | null => {
+  if (!delivery.deliveredAt) {
+    return null;
+  }
+
+  return {
+    deliveredAt: toIso(delivery.deliveredAt),
+    note: delivery.proofNote,
+    photoUrl: delivery.proofPhotoUrl,
+    submittedByActorType: delivery.proofSubmittedByActorType ?? "system",
+    submittedByActorId: delivery.proofSubmittedByActorId,
+    policy: {
+      requireNote: delivery.proofRequiredNote ?? false,
+      requirePhoto: delivery.proofRequiredPhoto ?? false
+    }
+  };
+};
+
 const buildDeliveryView = (
   delivery: DeliveryRecord,
   timeline: DeliveryTimelineEvent[],
@@ -222,6 +244,7 @@ const buildDeliveryView = (
   pickupAddress: delivery.pickupAddress,
   dropoffAddress: delivery.dropoffAddress,
   metadata: asMetadata(delivery.metadata),
+  proof: mapDeliveryProof(delivery),
   createdAt: toIso(delivery.createdAt),
   updatedAt: toIso(delivery.updatedAt),
   timeline,
@@ -292,7 +315,7 @@ const getScopedDelivery = async (input: { deliveryId: string; user: SessionUser 
       .where(eq(dispatchQueueEntries.deliveryId, delivery.id))
       .limit(1);
 
-    if (!queueEntry || queueEntry.offeredDriverId !== driver.id) {
+    if (delivery.driverId !== driver.id && (!queueEntry || queueEntry.offeredDriverId !== driver.id)) {
       throw deliveryError("FORBIDDEN", "delivery_driver_forbidden");
     }
 
@@ -1424,22 +1447,25 @@ export const listDeliveries = async (input: {
 
   if (input.user.role === "driver") {
     const driver = await resolveAuthenticatedDriverProfile(input.user);
+    const whereClause = input.filters?.status
+      ? and(
+          or(eq(deliveries.driverId, driver.id), eq(dispatchQueueEntries.offeredDriverId, driver.id)),
+          eq(deliveries.status, input.filters.status)
+        )
+      : or(eq(deliveries.driverId, driver.id), eq(dispatchQueueEntries.offeredDriverId, driver.id));
+
     const rows = await db
       .select({ delivery: deliveries })
-      .from(dispatchQueueEntries)
-      .innerJoin(deliveries, eq(deliveries.id, dispatchQueueEntries.deliveryId))
-      .where(
-        input.filters?.status
-          ? and(eq(dispatchQueueEntries.offeredDriverId, driver.id), eq(deliveries.status, input.filters.status))
-          : eq(dispatchQueueEntries.offeredDriverId, driver.id)
-      )
-      .orderBy(asc(dispatchQueueEntries.deadlineAt), desc(deliveries.createdAt));
+      .from(deliveries)
+      .leftJoin(dispatchQueueEntries, eq(dispatchQueueEntries.deliveryId, deliveries.id))
+      .where(whereClause)
+      .orderBy(desc(deliveries.createdAt));
 
-    const deliveryRows = rows.map((row) => row.delivery);
-    const deliveryIds = deliveryRows.map((row) => row.id);
+    const uniqueRows = Array.from(new Map(rows.map((row) => [row.delivery.id, row.delivery])).values());
+    const deliveryIds = uniqueRows.map((row) => row.id);
     const timelines = await loadTimelineByDeliveryIds(deliveryIds);
     const dispatchMap = await loadDispatchStateByDeliveryIds(deliveryIds);
-    return deliveryRows.map((row) => buildDeliveryView(row, timelines.get(row.id) ?? [], dispatchMap.get(row.id) ?? null));
+    return uniqueRows.map((row) => buildDeliveryView(row, timelines.get(row.id) ?? [], dispatchMap.get(row.id) ?? null));
   }
 
   throw deliveryError("FORBIDDEN", "delivery_role_forbidden:company_or_retailer_or_driver_required");
@@ -1496,6 +1522,121 @@ export const resolveDriverOffer = async (input: {
       reason: input.data.reason,
       metadata: input.data.metadata
     });
+  });
+};
+
+export const completeDelivery = async (input: {
+  user: SessionUser;
+  data: DeliveryCompletionInput;
+}): Promise<DeliveryDetail> => {
+  const { db } = assertDb();
+
+  return db.transaction(async (tx) => {
+    const [delivery] = await tx.select().from(deliveries).where(eq(deliveries.id, input.data.deliveryId)).for("update");
+
+    if (!delivery) {
+      throw deliveryError("NOT_FOUND", "delivery_not_found");
+    }
+
+    const [company] = await tx.select().from(companies).where(eq(companies.id, delivery.companyId)).limit(1);
+    if (!company) {
+      throw deliveryError("NOT_FOUND", "delivery_company_not_found");
+    }
+
+    let actor: DeliveryActor;
+    let proofSubmittedByActorType: DeliveryProof["submittedByActorType"];
+    let proofSubmittedByActorId: string | null = input.user.id;
+
+    if (input.user.role === "company") {
+      const companyProfile = await resolveAuthenticatedCompanyProfile(input.user);
+      if (delivery.companyId !== companyProfile.id) {
+        throw deliveryError("FORBIDDEN", "delivery_company_forbidden");
+      }
+
+      actor = {
+        actorType: "company",
+        actorId: input.user.id,
+        actorLabel: companyProfile.name
+      };
+      proofSubmittedByActorType = "company";
+    } else if (input.user.role === "driver") {
+      const driver = await resolveAuthenticatedDriverProfile(input.user);
+      if (delivery.driverId !== driver.id) {
+        throw deliveryError("FORBIDDEN", "delivery_driver_forbidden");
+      }
+
+      actor = {
+        actorType: "driver",
+        actorId: input.user.id,
+        actorLabel: driver.name
+      };
+      proofSubmittedByActorType = "driver";
+    } else {
+      throw deliveryError("FORBIDDEN", "delivery_role_forbidden:company_or_driver_required");
+    }
+
+    if (delivery.status === "delivered") {
+      throw deliveryError("CONFLICT", "delivery_already_delivered");
+    }
+
+    if (!DELIVERABLE_PROOF_STATUSES.includes(delivery.status)) {
+      throw deliveryError("BAD_REQUEST", `delivery_completion_invalid:${delivery.status}->delivered`);
+    }
+
+    const note = input.data.proof.note?.trim() || null;
+    const photoUrl = input.data.proof.photoUrl?.trim() || null;
+    const proofPolicy = {
+      requireNote: company.proofRequiredNote,
+      requirePhoto: company.proofRequiredPhoto
+    };
+
+    if (proofPolicy.requireNote && !note) {
+      throw deliveryError("BAD_REQUEST", "delivery_proof_note_required");
+    }
+
+    if (proofPolicy.requirePhoto && !photoUrl) {
+      throw deliveryError("BAD_REQUEST", "delivery_proof_photo_required");
+    }
+
+    const deliveredAt = new Date();
+    const [updated] = await tx
+      .update(deliveries)
+      .set({
+        status: "delivered",
+        deliveredAt,
+        proofNote: note,
+        proofPhotoUrl: photoUrl,
+        proofRequiredNote: proofPolicy.requireNote,
+        proofRequiredPhoto: proofPolicy.requirePhoto,
+        proofSubmittedByActorType,
+        proofSubmittedByActorId,
+        updatedAt: deliveredAt
+      })
+      .where(and(eq(deliveries.id, delivery.id), eq(deliveries.status, delivery.status)))
+      .returning();
+
+    if (!updated) {
+      throw deliveryError("CONFLICT", "delivery_completion_conflict");
+    }
+
+    await createTimelineEvent(tx, {
+      deliveryId: delivery.id,
+      status: "delivered",
+      actor,
+      metadata: {
+        reason: "delivery_completed_with_proof",
+        deliveredAt: toIso(deliveredAt),
+        proof: {
+          note,
+          photoUrl,
+          submittedByActorType: proofSubmittedByActorType,
+          submittedByActorId: proofSubmittedByActorId,
+          policy: proofPolicy
+        }
+      }
+    });
+
+    return loadDispatchViewWithinTx(tx, delivery.id);
   });
 };
 

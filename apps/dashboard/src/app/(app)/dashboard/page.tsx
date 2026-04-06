@@ -57,6 +57,30 @@ const transitionOptions = [
   { value: "in_transit", label: "Marcar em trânsito" }
 ] as const;
 
+const isProofCompletable = (status: string) => ["accepted", "picked_up", "in_transit"].includes(status);
+
+const renderProof = (proof: {
+  deliveredAt: string;
+  note: string | null;
+  photoUrl: string | null;
+  submittedByActorType: string;
+  submittedByActorId: string | null;
+  policy: { requireNote: boolean; requirePhoto: boolean };
+} | null) => {
+  if (!proof) {
+    return '<p data-testid="delivery-proof-empty">Nenhuma prova de entrega registrada.</p>';
+  }
+
+  return `<div class="delivery-proof" data-testid="delivery-proof">
+    <div>deliveredAt: <code data-testid="delivery-proof-delivered-at">${escapeHtml(formatDate(proof.deliveredAt))}</code></div>
+    <div>submittedBy: <code data-testid="delivery-proof-submitted-by">${escapeHtml(proof.submittedByActorType)}</code></div>
+    <div>submittedByActorId: <code>${escapeHtml(proof.submittedByActorId ?? "n/a")}</code></div>
+    <div>note: <code data-testid="delivery-proof-note">${escapeHtml(proof.note ?? "n/a")}</code></div>
+    <div>photoUrl: <code data-testid="delivery-proof-photo-url">${escapeHtml(proof.photoUrl ?? "n/a")}</code></div>
+    <div>policy: <code data-testid="delivery-proof-policy">note=${String(proof.policy.requireNote)} photo=${String(proof.policy.requirePhoto)}</code></div>
+  </div>`;
+};
+
 const renderBondItems = (
   items: Array<{
     bondId: string;
@@ -255,6 +279,18 @@ const renderDeliveryList = (
                 <button type="submit" data-testid="delivery-transition-submit">Atualizar entrega</button>
               </form>`
             : ""}
+          ${(mode === "company" || mode === "driver") && isProofCompletable(delivery.status)
+            ? `<form method="post" action="/dashboard/deliveries/complete" class="delivery-transition-form" data-testid="delivery-complete-form">
+                <input type="hidden" name="deliveryId" value="${escapeHtml(delivery.deliveryId)}" />
+                <label>Nota da prova (opcional conforme política)
+                  <input name="proofNote" placeholder="recebido na portaria, nome de quem recebeu" data-testid="delivery-proof-note-input" />
+                </label>
+                <label>Foto/URL da prova (opcional conforme política)
+                  <input name="proofPhotoUrl" placeholder="https://cdn.sendro.test/proofs/pod-123.jpg" data-testid="delivery-proof-photo-input" />
+                </label>
+                <button type="submit" data-testid="delivery-complete-submit">Concluir com prova</button>
+              </form>`
+            : ""}
           ${mode === "driver" && delivery.dispatch?.phase === "offered" && delivery.dispatch.activeAttemptId
             ? `<form method="post" action="/dashboard/driver-offer" class="driver-offer-form" data-testid="driver-offer-form">
                 <input type="hidden" name="deliveryId" value="${escapeHtml(delivery.deliveryId)}" />
@@ -267,6 +303,10 @@ const renderDeliveryList = (
                 </div>
               </form>`
             : ""}
+          <section class="timeline-card">
+            <h4>Proof of delivery</h4>
+            ${renderProof(delivery.proof)}
+          </section>
           <section class="timeline-card">
             <h4>Timeline</h4>
             ${renderTimeline(delivery.timeline)}
@@ -513,6 +553,14 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
               <div data-testid="company-delivery-feedback-message">${escapeHtml(viewModel.companyDeliveries.transitionFeedback.message)}</div>
               <div>deliveryId: <code>${escapeHtml(viewModel.companyDeliveries.transitionFeedback.deliveryId)}</code></div>
               <div>status: <code>${escapeHtml(viewModel.companyDeliveries.transitionFeedback.status)}</code></div>
+            </div>`
+          : ""}
+        ${viewModel.companyDeliveries.completionFeedback
+          ? `<div class="delivery-feedback" data-testid="company-delivery-completion-feedback">
+              <strong>Entrega concluída com prova</strong>
+              <div data-testid="company-delivery-completion-message">${escapeHtml(viewModel.companyDeliveries.completionFeedback.message)}</div>
+              <div>deliveryId: <code>${escapeHtml(viewModel.companyDeliveries.completionFeedback.deliveryId)}</code></div>
+              <div>status: <code>${escapeHtml(viewModel.companyDeliveries.completionFeedback.status)}</code></div>
             </div>`
           : ""}
         ${viewModel.companyDeliveries.reprocessFeedback
