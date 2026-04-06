@@ -35,5 +35,21 @@ export const whatsappRouter = router({
         })
         .returning();
       return row;
+    }),
+
+  registerDriverContact: protectedProcedure
+    .input(z.object({ contactJid: z.string(), userId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { db } = assertDb();
+      const company = await resolveAuthenticatedCompanyProfile(ctx.session.user as never);
+      const [row] = await db
+        .insert(whatsappContactMappings)
+        .values({ companyId: company.id, contactJid: input.contactJid, userId: input.userId, role: "driver" })
+        .onConflictDoUpdate({
+          target: [whatsappContactMappings.companyId, whatsappContactMappings.contactJid],
+          set: { userId: input.userId, role: "driver", updatedAt: new Date() }
+        })
+        .returning();
+      return row;
     })
 });

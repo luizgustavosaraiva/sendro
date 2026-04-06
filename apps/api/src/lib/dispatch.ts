@@ -1862,6 +1862,57 @@ export const completeDelivery = async (input: {
   });
 };
 
+// Allowed driver-initiated status transitions
+const driverAllowedTransitions: Record<string, Array<"picked_up" | "in_transit">> = {
+  accepted: ["picked_up"],
+  picked_up: ["in_transit"]
+};
+
+export const driverUpdateDeliveryStatus = async (input: {
+  user: SessionUser;
+  data: { deliveryId: string; status: "picked_up" | "in_transit" };
+}): Promise<DeliveryDetail> => {
+  const { db } = assertDb();
+  requireRole(input.user, "driver");
+  const driver = await resolveAuthenticatedDriverProfile(input.user);
+
+  return db.transaction(async (tx) => {
+    const [delivery] = await tx.select().from(deliveries).where(eq(deliveries.id, input.data.deliveryId)).for("update");
+
+    if (!delivery) {
+      throw deliveryError("NOT_FOUND", "delivery_not_found");
+    }
+
+    if (delivery.driverId !== driver.id) {
+      throw deliveryError("FORBIDDEN", "delivery_driver_forbidden");
+    }
+
+    const allowed = driverAllowedTransitions[delivery.status] ?? [];
+    if (!allowed.includes(input.data.status)) {
+      throw deliveryError("BAD_REQUEST", `delivery_transition_invalid:${delivery.status}->${input.data.status}`);
+    }
+
+    const [updated] = await tx
+      .update(deliveries)
+      .set({ status: input.data.status, updatedAt: new Date() })
+      .where(eq(deliveries.id, delivery.id))
+      .returning();
+
+    await createTimelineEvent(tx, {
+      deliveryId: delivery.id,
+      status: input.data.status,
+      actor: {
+        actorType: "driver",
+        actorId: input.user.id,
+        actorLabel: driver.name
+      },
+      metadata: { reason: `driver_status_update:${input.data.status}` }
+    });
+
+    return loadDispatchViewWithinTx(tx, updated.id);
+  });
+};
+
 export const transitionDelivery = async (input: {
   user: SessionUser;
   data: { deliveryId: string; status: "assigned" | "picked_up" | "in_transit"; metadata?: Record<string, unknown> };

@@ -4,6 +4,7 @@ import { whatsappContactMappings, whatsappSessions } from "@repo/db/schema";
 import type { WhatsAppProvider } from "@repo/shared";
 import type { WhatsAppSessionStatus } from "@repo/shared";
 import { processIntakeMessage } from "./intake";
+import { processDriverMessage } from "./driver";
 import { EvolutionGoAdapter } from "./evolution-go";
 import { env } from "../../env";
 
@@ -202,20 +203,6 @@ export async function handleConnectionUpdate({
   console.info(
     `[WhatsApp] connectionUpdate instanceName=${instanceName} companyId=${session.companyId} ${prevStatus} → ${newStatus} state=${state}${reason ? ` reason=${reason}` : ""} ts=${new Date().toISOString()}`
   );
-}
-
-// ─── Placeholder driver handler (replaced in T02) ────────────────────────────
-
-export async function processDriverMessage(_params: {
-  instanceName: string;
-  companyId: string;
-  contactJid: string;
-  messageId: string;
-  messageText: string;
-  imageUrl?: string;
-  sendReply: (text: string) => Promise<void>;
-}): Promise<void> {
-  await _params.sendReply("Driver handler coming soon.");
 }
 
 // ─── Message routing ──────────────────────────────────────────────────────────
