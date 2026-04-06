@@ -53,9 +53,12 @@ async function seedDriverScenario(suffix: string) {
     .insert(users)
     .values({ id: `drv-user-${suffix}`, name: "Drv User", email: `drv.${suffix}@test.com`, emailVerified: true, role: "driver" })
     .returning();
+  // Use full numeric suffix to avoid phone collisions between fast-running tests
+  const numericSuffix = suffix.replace(/\D/g, "");
+  const phone = `+${numericSuffix.slice(0, 13).padEnd(13, "0")}`;
   const [driver] = await db
     .insert(drivers)
-    .values({ userId: driverUser.id, name: `Driver ${suffix}`, phone: `+55${suffix.replace(/\D/g, "").slice(0, 11)}` })
+    .values({ userId: driverUser.id, name: `Driver ${suffix}`, phone })
     .returning();
   await db.insert(bonds).values({
     companyId: company.id,
