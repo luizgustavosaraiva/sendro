@@ -977,6 +977,102 @@ describe("dashboard auth pages", () => {
     expect(html).toContain("Somente contas empresa visualizam a fila operacional de entregas.");
   });
 
+  it("renders operational summary and company drivers availability with explicit diagnostics", () => {
+    const html = renderDashboardPage({
+      user: { name: "Ops Company", email: "ops@sendro.test", role: "company" },
+      profile: { name: "Ops Company", stripeCustomerId: null },
+      diagnostics: { role: "company", profileCreated: true, stripeStage: "created" },
+      bondsState: "empty",
+      bonds: { activeRetailers: [], pendingRetailers: [], activeDrivers: [] },
+      summaryState: "loaded",
+      summary: {
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        window: "all_time",
+        assumptions: ["on_time_policy_pending"],
+        onTime: { state: "unavailable_policy_pending", reason: "unavailable_policy_pending" },
+        kpis: {
+          awaitingAcceptance: 2,
+          waitingQueue: 1,
+          failedAttempts: 3,
+          delivered: 11,
+          activeDrivers: 4
+        }
+      },
+      driversState: "loaded",
+      driversOperational: [
+        {
+          driverId: "550e8400-e29b-41d4-a716-446655440901",
+          driverName: "Motorista Norte",
+          companyId: "550e8400-e29b-41d4-a716-446655440900",
+          bondId: "550e8400-e29b-41d4-a716-446655440902",
+          bondStatus: "active",
+          operationalState: "available",
+          lastOfferAt: "2026-01-01T00:10:00.000Z",
+          lastResolution: "2026-01-01T00:11:00.000Z",
+          strikeCount: 1,
+          strikeConsequence: "warning",
+          pendingOfferCount: 0,
+          activeDeliveriesCount: 1,
+          failedAttemptsCount: 0,
+          assumptions: []
+        }
+      ],
+      invitations: { state: "empty", invitations: [] },
+      retailerDeliveries: { state: "not-retailer", error: "Somente lojistas podem criar entregas pelo dashboard.", deliveries: [] },
+      companyDeliveries: { state: "empty", deliveries: [], activeQueue: [], waitingQueue: [] },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: { total: 0, lastStrike: null, activeConsequence: null, bondStatus: null }
+      }
+    });
+
+    expect(html).toContain('data-testid="summary-state">loaded');
+    expect(html).toContain('data-testid="drivers-state">loaded');
+    expect(html).toContain('data-testid="operations-summary-kpis"');
+    expect(html).toContain('data-testid="kpi-on-time-state">unavailable_policy_pending');
+    expect(html).toContain('data-testid="drivers-operational-list"');
+    expect(html).toContain('data-testid="driver-operational-state">Disponível');
+  });
+
+  it("renders summary/drivers error and not-company diagnostics without leaking company data", () => {
+    const html = renderDashboardPage({
+      user: { name: "Retailer User", email: "retailer@sendro.test", role: "retailer" },
+      profile: { name: "Retailer User", stripeCustomerId: null },
+      diagnostics: { role: "retailer", profileCreated: true, stripeStage: "created" },
+      bondsState: "not-company",
+      bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+      bonds: { activeRetailers: [], pendingRetailers: [], activeDrivers: [] },
+      summary: null,
+      summaryState: "not-company",
+      summaryError: "Somente contas empresa visualizam KPIs operacionais da empresa.",
+      driversOperational: [],
+      driversState: "not-company",
+      driversError: "Somente contas empresa visualizam a disponibilidade operacional dos entregadores.",
+      invitations: { state: "not-company", error: "Somente contas empresa podem gerar e listar convites.", invitations: [] },
+      retailerDeliveries: { state: "empty", deliveries: [] },
+      companyDeliveries: { state: "not-company", error: "Somente contas empresa visualizam a fila operacional de entregas.", deliveries: [], activeQueue: [], waitingQueue: [] },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: { total: 0, lastStrike: null, activeConsequence: null, bondStatus: null }
+      }
+    });
+
+    expect(html).toContain('data-testid="operations-summary-not-company"');
+    expect(html).toContain('data-testid="drivers-operational-not-company"');
+    expect(html).toContain('data-testid="summary-state">not-company');
+    expect(html).toContain('data-testid="drivers-state">not-company');
+  });
+
   it("marks dashboard as a protected path", () => {
     expect(isProtectedPath("/dashboard")).toBe(true);
     expect(isProtectedPath("/login")).toBe(false);

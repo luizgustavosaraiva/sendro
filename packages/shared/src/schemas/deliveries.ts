@@ -7,7 +7,10 @@ import {
   dispatchRankingSignals,
   dispatchWaitingReasons,
   driverOfferStatuses,
-  driverStrikeConsequences
+  driverStrikeConsequences,
+  operationsSummaryWindows,
+  operationsOnTimeStates,
+  companyDriverOperationalStates
 } from "../types/deliveries";
 
 const deliveryMetadataSchema: z.ZodType<Record<string, unknown>> = z.record(z.string(), z.unknown());
@@ -83,6 +86,10 @@ export const dispatchQueueFiltersSchema = z.object({
 
 export const waitingQueueFiltersSchema = z.object({
   reason: dispatchWaitingReasonSchema.optional()
+});
+
+export const operationsSummaryFiltersSchema = z.object({
+  window: z.enum(operationsSummaryWindows).optional()
 });
 
 export const reprocessDispatchTimeoutsSchema = z.object({
@@ -203,6 +210,43 @@ export const resolveDriverOfferResultSchema = z.object({
   queueEntryId: z.string().uuid(),
   strike: driverStrikeSchema.nullable()
 });
+
+export const operationsSummarySchema = z.object({
+  generatedAt: z.string().datetime(),
+  window: z.enum(operationsSummaryWindows),
+  assumptions: z.array(z.string()),
+  onTime: z.object({
+    value: z.number().min(0).max(100).optional(),
+    state: z.enum(operationsOnTimeStates),
+    reason: z.string().min(1)
+  }),
+  kpis: z.object({
+    awaitingAcceptance: z.number().int().nonnegative(),
+    waitingQueue: z.number().int().nonnegative(),
+    failedAttempts: z.number().int().nonnegative(),
+    delivered: z.number().int().nonnegative(),
+    activeDrivers: z.number().int().nonnegative()
+  })
+});
+
+export const companyDriverOperationalStateSchema = z.object({
+  driverId: z.string().uuid(),
+  driverName: z.string(),
+  companyId: z.string().uuid(),
+  bondId: z.string().uuid(),
+  bondStatus: z.enum(["pending", "active", "suspended", "revoked"]),
+  operationalState: z.enum(companyDriverOperationalStates),
+  lastOfferAt: z.string().datetime().nullable(),
+  lastResolution: z.string().datetime().nullable(),
+  strikeCount: z.number().int().nonnegative(),
+  strikeConsequence: driverStrikeConsequenceSchema.nullable(),
+  pendingOfferCount: z.number().int().nonnegative(),
+  activeDeliveriesCount: z.number().int().nonnegative(),
+  failedAttemptsCount: z.number().int().nonnegative(),
+  assumptions: z.array(z.string())
+});
+
+export const companyDriversOperationalListSchema = z.array(companyDriverOperationalStateSchema);
 export const deliveryListSchema = z.array(deliveryListItemSchema);
 export const dispatchQueueListSchema = z.array(deliveryListItemSchema);
 export const waitingQueueListSchema = z.array(deliveryListItemSchema);

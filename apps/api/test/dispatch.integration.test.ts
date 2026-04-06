@@ -32,6 +32,11 @@ const trpcErrorMessage = (response: request.Response) => {
   return body.error?.json?.message ?? body.error?.message ?? body.message ?? response.text;
 };
 
+const operationsSummaryUrl = (input?: object) =>
+  input
+    ? `/trpc/deliveries.operationsSummary?input=${encodeURIComponent(JSON.stringify(input))}`
+    : "/trpc/deliveries.operationsSummary";
+
 describe.skipIf(!process.env.DATABASE_URL)("dispatch integration", () => {
   let app: FastifyInstance;
 
@@ -157,6 +162,38 @@ describe.skipIf(!process.env.DATABASE_URL)("dispatch integration", () => {
       .orderBy(asc(deliveryEvents.sequence));
     expect(events.map((event) => event.status)).toEqual(["created", "queued", "offered", "accepted"]);
     expect(events[3].actorType).toBe("driver");
+  }, 30000);
+
+  it("exposes deterministic operations summary errors for non-company role and malformed window", async () => {
+    const suffix = Date.now() + 2;
+
+    const companyAgent = await registerAndLogin(app, {
+      role: "company",
+      name: "Company Ops Guard",
+      email: `company.ops.guard.${suffix}@sendro.test`,
+      companyName: "Company Ops Guard"
+    });
+
+    const driverAgent = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Ops Guard",
+      email: `driver.ops.guard.${suffix}@sendro.test`,
+      driverName: "Driver Ops Guard",
+      phone: `+5561${String(suffix).slice(-8)}`
+    });
+
+    const okResponse = await companyAgent.get(operationsSummaryUrl({ window: "all_time" })).set("origin", "http://localhost:3000");
+    expect(okResponse.status, okResponse.text).toBe(200);
+    expect(trpcJson(okResponse).onTime.state).toBe("unavailable_policy_pending");
+
+    const malformedWindow = await companyAgent
+      .get(operationsSummaryUrl({ window: "invalid" }))
+      .set("origin", "http://localhost:3000");
+    expect(malformedWindow.status).toBe(400);
+
+    const forbidden = await driverAgent.get(operationsSummaryUrl()).set("origin", "http://localhost:3000");
+    expect(forbidden.status).toBe(403);
+    expect(trpcErrorMessage(forbidden)).toContain("bond_role_forbidden:company_required");
   }, 30000);
 
   it("progresses rejection strikes per company and blocks further offers after suspension and revocation", async () => {

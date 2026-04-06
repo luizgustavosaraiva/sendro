@@ -13,6 +13,9 @@ import {
   dispatchQueueListSchema,
   getDeliveryDetailSchema,
   lookupInvitationResultSchema,
+  operationsSummaryFiltersSchema,
+  operationsSummarySchema,
+  companyDriversOperationalListSchema,
   redeemInvitationResultSchema,
   redeemInvitationSchema,
   reprocessDispatchTimeoutsResultSchema,
@@ -38,6 +41,8 @@ import {
   completeDelivery,
   createDelivery,
   getDeliveryDetail,
+  getOperationsSummary,
+  listCompanyDriversOperational,
   listDeliveries,
   listDispatchQueue,
   listWaitingQueue,
@@ -146,6 +151,13 @@ export const appRouter = router({
       .input(waitingQueueFiltersSchema.optional())
       .output(waitingQueueListSchema)
       .query(async ({ ctx, input }) => listWaitingQueue({ user: ctx.session.user as never, filters: input })),
+    operationsSummary: protectedProcedure
+      .input(operationsSummaryFiltersSchema.optional())
+      .output(operationsSummarySchema)
+      .query(async ({ ctx, input }) => getOperationsSummary({ user: ctx.session.user as never, data: input })),
+    companyDriversOperational: protectedProcedure
+      .output(companyDriversOperationalListSchema)
+      .query(async ({ ctx }) => listCompanyDriversOperational({ user: ctx.session.user as never })),
     reprocessTimeouts: protectedProcedure
       .input(reprocessDispatchTimeoutsSchema.optional())
       .output(reprocessDispatchTimeoutsResultSchema)

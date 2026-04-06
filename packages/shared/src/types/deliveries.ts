@@ -33,6 +33,22 @@ export type DispatchWaitingReason = (typeof dispatchWaitingReasons)[number];
 export const dispatchRankingSignals = ["queue", "distance", "region", "price"] as const;
 export type DispatchRankingSignal = (typeof dispatchRankingSignals)[number];
 
+export const operationsSummaryWindows = ["all_time", "last_24h"] as const;
+export type OperationsSummaryWindow = (typeof operationsSummaryWindows)[number];
+
+export const operationsOnTimeStates = ["available", "unavailable_policy_pending"] as const;
+export type OperationsOnTimeState = (typeof operationsOnTimeStates)[number];
+
+export const companyDriverOperationalStates = [
+  "available",
+  "offered",
+  "busy",
+  "suspended",
+  "revoked",
+  "pending_bond"
+] as const;
+export type CompanyDriverOperationalStateKind = (typeof companyDriverOperationalStates)[number];
+
 export type DeliveryTimelineEvent = {
   eventId: string;
   deliveryId: string;
@@ -209,11 +225,49 @@ export type WaitingQueueFiltersInput = {
   reason?: DispatchWaitingReason;
 };
 
+export type OperationsSummaryFiltersInput = {
+  window?: OperationsSummaryWindow;
+};
+
+export type OperationsSummary = {
+  generatedAt: string;
+  window: OperationsSummaryWindow;
+  assumptions: string[];
+  onTime: {
+    value?: number;
+    state: OperationsOnTimeState;
+    reason: string;
+  };
+  kpis: {
+    awaitingAcceptance: number;
+    waitingQueue: number;
+    failedAttempts: number;
+    delivered: number;
+    activeDrivers: number;
+  };
+};
+
+export type CompanyDriverOperationalState = {
+  driverId: string;
+  driverName: string;
+  companyId: string;
+  bondId: string;
+  bondStatus: "pending" | "active" | "suspended" | "revoked";
+  operationalState: CompanyDriverOperationalStateKind;
+  lastOfferAt: string | null;
+  lastResolution: string | null;
+  strikeCount: number;
+  strikeConsequence: DriverStrikeConsequence | null;
+  pendingOfferCount: number;
+  activeDeliveriesCount: number;
+  failedAttemptsCount: number;
+  assumptions: string[];
+};
+
 export type ReprocessDispatchTimeoutsInput = {
   companyId?: string;
   nowIso?: string;
 };
-
 export type ReprocessDispatchTimeoutsResult = {
   processedAt: string;
   scannedEntries: number;

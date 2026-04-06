@@ -13,12 +13,16 @@ import {
   resolveDriverOfferResultSchema,
   resolveDriverOfferSchema,
   transitionDeliverySchema,
+  operationsSummarySchema,
+  companyDriversOperationalListSchema,
+  type CompanyDriverOperationalState,
   type CreateDeliveryInput,
   type DeliveryCompletionInput,
   type DeliveryDetail,
   type DeliveryListItem,
   type DeliveryStatus,
   type DriverStrike,
+  type OperationsSummary,
   type ReprocessDispatchTimeoutsResult,
   type ResolveDriverOfferInput,
   type ResolveDriverOfferResult,
@@ -154,6 +158,12 @@ export type DashboardCompanyViewModel = {
   bonds: CompanyBondLists;
   bondsState: "loaded" | "empty" | "error" | "not-company";
   bondsError?: string;
+  summary: OperationsSummary | null;
+  summaryState: "loaded" | "empty" | "error" | "not-company";
+  summaryError?: string;
+  driversOperational: CompanyDriverOperationalState[];
+  driversState: "loaded" | "empty" | "error" | "not-company";
+  driversError?: string;
   invitations: DashboardCompanyInvitationViewModel;
   retailerDeliveries: DashboardRetailerDeliveriesViewModel;
   companyDeliveries: DashboardCompanyDeliveriesViewModel;
@@ -350,6 +360,24 @@ export const reprocessCompanyDispatch = async (input: { nowIso?: string; company
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const getOperationsSummary = async (
+  cookieHeader?: string | null,
+  input?: { window?: "all_time" | "last_24h" }
+) => {
+  const result = await fetchTrpc(
+    "deliveries.operationsSummary",
+    operationsSummarySchema,
+    cookieHeader,
+    input && Object.keys(input).length > 0 ? input : undefined
+  );
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const getCompanyDriversOperational = async (cookieHeader?: string | null) => {
+  const result = await fetchTrpc("deliveries.companyDriversOperational", companyDriversOperationalListSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 export const lookupInvitationByToken = async (token: string) => {
   const response = await fetch(buildApiUrl(`/api/invitations/${encodeURIComponent(token)}`), {
     headers: {
@@ -528,6 +556,12 @@ export const getDashboardCompanyViewModel = async (
       bonds: defaultBondLists(),
       bondsState: "not-company",
       bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+      summary: null,
+      summaryState: "not-company",
+      summaryError: "Somente contas empresa visualizam KPIs operacionais da empresa.",
+      driversOperational: [],
+      driversState: "not-company",
+      driversError: "Somente contas empresa visualizam a disponibilidade operacional dos entregadores.",
       invitations: {
         invitations: [],
         state: "not-company",
@@ -558,6 +592,12 @@ export const getDashboardCompanyViewModel = async (
         bonds: defaultBondLists(),
         bondsState: "not-company",
         bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+        summary: null,
+        summaryState: "not-company",
+        summaryError: "Somente contas empresa visualizam KPIs operacionais da empresa.",
+        driversOperational: [],
+        driversState: "not-company",
+        driversError: "Somente contas empresa visualizam a disponibilidade operacional dos entregadores.",
         invitations: {
           invitations: [],
           state: "not-company",
@@ -639,6 +679,12 @@ export const getDashboardCompanyViewModel = async (
       bonds: defaultBondLists(),
       bondsState: "not-company",
       bondsError: "Somente contas empresa visualizam vínculos da empresa no dashboard.",
+      summary: null,
+      summaryState: "not-company",
+      summaryError: "Somente contas empresa visualizam KPIs operacionais da empresa.",
+      driversOperational: [],
+      driversState: "not-company",
+      driversError: "Somente contas empresa visualizam a disponibilidade operacional dos entregadores.",
       invitations: {
         invitations: [],
         state: "not-company",
@@ -681,6 +727,14 @@ export const getDashboardCompanyViewModel = async (
     bondsState = "error";
     bondsError = `A sessão foi resolvida, mas os vínculos da empresa não puderam ser carregados. Diagnóstico: ${detail}`;
   }
+
+  let summary: OperationsSummary | null = null;
+  let summaryState: DashboardCompanyViewModel["summaryState"] = "empty";
+  let summaryError: string | undefined;
+
+  let driversOperational: CompanyDriverOperationalState[] = [];
+  let driversState: DashboardCompanyViewModel["driversState"] = "empty";
+  let driversError: string | undefined;
 
   let invitations = defaultInvitationViewModel();
 
@@ -797,11 +851,17 @@ export const getDashboardCompanyViewModel = async (
     }
 
     if (companyDeliveries.state !== "error") {
-      const [rows, activeQueueRows, waitingQueueRows] = await Promise.all([
+      const [rowsResult, activeQueueResult, waitingQueueResult, summaryResult, driversResult] = await Promise.allSettled([
         getDeliveries(cookieHeader),
         getDispatchQueue(cookieHeader),
-        getWaitingQueue(cookieHeader)
+        getWaitingQueue(cookieHeader),
+        getOperationsSummary(cookieHeader),
+        getCompanyDriversOperational(cookieHeader)
       ]);
+
+      const rows = rowsResult.status === "fulfilled" ? rowsResult.value : null;
+      const activeQueueRows = activeQueueResult.status === "fulfilled" ? activeQueueResult.value : null;
+      const waitingQueueRows = waitingQueueResult.status === "fulfilled" ? waitingQueueResult.value : null;
 
       const deliveriesRows = rows ?? [];
       const activeRows = activeQueueRows ?? [];
@@ -847,6 +907,40 @@ export const getDashboardCompanyViewModel = async (
           reprocessFeedback
         };
       }
+
+      if (summaryResult.status === "rejected") {
+        const detail = summaryResult.reason instanceof Error ? summaryResult.reason.message : "operations_summary_unavailable";
+        summary = null;
+        summaryState = "error";
+        summaryError = `A sessão foi resolvida, mas o summary operacional não pôde ser carregado. Diagnóstico: ${detail}`;
+      } else if (!summaryResult.value) {
+        summary = null;
+        summaryState = "error";
+        summaryError = "A sessão foi resolvida, mas o summary operacional não pôde ser carregado.";
+      } else {
+        summary = summaryResult.value;
+        const hasSummaryData =
+          summary.kpis.awaitingAcceptance > 0 ||
+          summary.kpis.waitingQueue > 0 ||
+          summary.kpis.failedAttempts > 0 ||
+          summary.kpis.delivered > 0 ||
+          summary.kpis.activeDrivers > 0;
+        summaryState = hasSummaryData ? "loaded" : "empty";
+      }
+
+      if (driversResult.status === "rejected") {
+        const detail = driversResult.reason instanceof Error ? driversResult.reason.message : "company_drivers_operational_unavailable";
+        driversOperational = [];
+        driversState = "error";
+        driversError = `A sessão foi resolvida, mas a disponibilidade operacional dos entregadores não pôde ser carregada. Diagnóstico: ${detail}`;
+      } else if (!driversResult.value) {
+        driversOperational = [];
+        driversState = "error";
+        driversError = "A sessão foi resolvida, mas a disponibilidade operacional dos entregadores não pôde ser carregada.";
+      } else {
+        driversOperational = driversResult.value;
+        driversState = driversOperational.length > 0 ? "loaded" : "empty";
+      }
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown_company_delivery_load_error";
@@ -857,6 +951,12 @@ export const getDashboardCompanyViewModel = async (
       state: "error",
       error: `A sessão foi resolvida, mas a fila de entregas da empresa não pôde ser carregada. Diagnóstico: ${detail}`
     };
+    summary = null;
+    summaryState = "error";
+    summaryError = `A sessão foi resolvida, mas o summary operacional não pôde ser carregado. Diagnóstico: ${detail}`;
+    driversOperational = [];
+    driversState = "error";
+    driversError = `A sessão foi resolvida, mas a disponibilidade operacional dos entregadores não pôde ser carregada. Diagnóstico: ${detail}`;
   }
 
   return {
@@ -866,6 +966,12 @@ export const getDashboardCompanyViewModel = async (
     bonds,
     bondsState,
     bondsError,
+    summary,
+    summaryState,
+    summaryError,
+    driversOperational,
+    driversState,
+    driversError,
     invitations,
     retailerDeliveries: {
       deliveries: [],

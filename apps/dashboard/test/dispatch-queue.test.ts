@@ -296,6 +296,149 @@ describe("dashboard dispatch queue SSR", () => {
     expect(html).toContain('data-testid="delivery-complete-submit"');
   });
 
+  it("renders company completion feedback when proof-of-delivery closes a lifecycle", () => {
+    const html = renderDashboardPage({
+      user: { name: "Ops Company", email: "ops@sendro.test", role: "company" },
+      profile: { id: "550e8400-e29b-41d4-a716-446655440000", name: "Ops Company", stripeCustomerId: null },
+      diagnostics: { role: "company", profileCreated: true, stripeStage: "created" },
+      bondsState: "empty",
+      bonds: { activeRetailers: [], pendingRetailers: [], activeDrivers: [] },
+      invitations: { state: "empty", invitations: [] },
+      retailerDeliveries: { state: "not-retailer", error: "Somente lojistas podem criar entregas pelo dashboard.", deliveries: [] },
+      companyDeliveries: {
+        state: "loaded",
+        deliveries: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655440300",
+            companyId: "550e8400-e29b-41d4-a716-446655440000",
+            retailerId: "550e8400-e29b-41d4-a716-446655440301",
+            driverId: "550e8400-e29b-41d4-a716-446655440302",
+            externalReference: "order-company-proof",
+            status: "delivered",
+            pickupAddress: "Rua I",
+            dropoffAddress: "Rua J",
+            metadata: {},
+            proof: {
+              deliveredAt: "2026-01-01T00:10:00.000Z",
+              note: "Recebido na portaria principal.",
+              photoUrl: "https://cdn.sendro.test/proofs/order-company-proof.jpg",
+              submittedByActorType: "driver",
+              submittedByActorId: "user-driver-company",
+              policy: { requireNote: true, requirePhoto: true }
+            },
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:10:00.000Z",
+            timeline: [],
+            dispatch: null
+          }
+        ],
+        activeQueue: [],
+        waitingQueue: [],
+        completionFeedback: {
+          message: "Entrega concluída com prova registrada.",
+          deliveryId: "550e8400-e29b-41d4-a716-446655440300",
+          status: "delivered"
+        }
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: {
+          total: 0,
+          lastStrike: null,
+          activeConsequence: null,
+          bondStatus: null
+        }
+      }
+    });
+
+    expect(html).toContain('data-testid="company-delivery-completion-feedback"');
+    expect(html).toContain('data-testid="company-delivery-completion-message"');
+    expect(html).toContain('Entrega concluída com prova registrada.');
+    expect(html).toContain('data-testid="delivery-proof"');
+    expect(html).toContain('data-testid="delivery-proof-policy">note=true photo=true');
+  });
+
+  it("keeps queue and waiting visible when summary/drivers blocks fail", () => {
+    const html = renderDashboardPage({
+      user: { name: "Ops Company", email: "ops@sendro.test", role: "company" },
+      profile: { name: "Ops Company", stripeCustomerId: null },
+      diagnostics: { role: "company", profileCreated: true, stripeStage: "created" },
+      bondsState: "empty",
+      bonds: { activeRetailers: [], pendingRetailers: [], activeDrivers: [] },
+      summary: null,
+      summaryState: "error",
+      summaryError: "summary block failed",
+      driversOperational: [],
+      driversState: "error",
+      driversError: "drivers block failed",
+      invitations: { state: "empty", invitations: [] },
+      retailerDeliveries: { state: "not-retailer", error: "Somente lojistas podem criar entregas pelo dashboard.", deliveries: [] },
+      companyDeliveries: {
+        state: "loaded",
+        deliveries: [],
+        activeQueue: [
+          {
+            deliveryId: "550e8400-e29b-41d4-a716-446655441000",
+            companyId: "550e8400-e29b-41d4-a716-446655441001",
+            retailerId: "550e8400-e29b-41d4-a716-446655441002",
+            driverId: null,
+            externalReference: "queue-still-visible",
+            status: "offered",
+            pickupAddress: null,
+            dropoffAddress: null,
+            metadata: {},
+            proof: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            timeline: [],
+            dispatch: {
+              queueEntryId: "550e8400-e29b-41d4-a716-446655441003",
+              deliveryId: "550e8400-e29b-41d4-a716-446655441000",
+              companyId: "550e8400-e29b-41d4-a716-446655441001",
+              phase: "offered",
+              timeoutSeconds: 120,
+              activeAttemptNumber: 1,
+              activeAttemptId: "550e8400-e29b-41d4-a716-446655441004",
+              offeredDriverId: null,
+              offeredDriverName: null,
+              offeredAt: null,
+              deadlineAt: null,
+              waitingReason: null,
+              waitingSince: null,
+              rankingVersion: "dispatch-v1",
+              assumptions: [],
+              latestSnapshot: [],
+              strikes: [],
+              attempts: [],
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z"
+            }
+          }
+        ],
+        waitingQueue: []
+      },
+      driverDeliveries: {
+        state: "not-driver",
+        offerState: "not-driver",
+        strikeState: "not-driver",
+        error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard.",
+        deliveries: [],
+        activeOffer: null,
+        strikeSummary: { total: 0, lastStrike: null, activeConsequence: null, bondStatus: null }
+      }
+    });
+
+    expect(html).toContain('data-testid="operations-summary-error"');
+    expect(html).toContain('data-testid="drivers-operational-error"');
+    expect(html).toContain('data-testid="dispatch-active-list"');
+    expect(html).toContain('queue-still-visible');
+  });
+
   it("renders explicit empty and error states without collapsing them", () => {
     const html = renderDashboardPage({
       user: { name: "Ops Company", email: "ops@sendro.test", role: "company" },

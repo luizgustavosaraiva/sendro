@@ -1,7 +1,7 @@
 import type { DashboardCompanyViewModel } from "../../../lib/trpc";
 
-const escapeHtml = (value: string) =>
-  value
+const escapeHtml = (value: string | number | boolean | null | undefined) =>
+  String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -49,6 +49,15 @@ const bondStatusCopy: Record<string, string> = {
   active: "Ativo",
   suspended: "Suspenso",
   revoked: "Revogado"
+};
+
+const operationalStateCopy: Record<string, string> = {
+  available: "Disponível",
+  offered: "Com oferta pendente",
+  busy: "Em entrega ativa",
+  suspended: "Suspenso",
+  revoked: "Revogado",
+  pending_bond: "Vínculo pendente"
 };
 
 const transitionOptions = [
@@ -218,6 +227,91 @@ const renderOperationalQueue = (
         ${renderDispatchDiagnostics(delivery)}
       </article>
     </li>`)
+    .join("")}</ul>`;
+};
+
+const renderOperationsSummary = (viewModel: DashboardCompanyViewModel) => {
+  if (viewModel.summaryState === "not-company") {
+    return '<p data-testid="operations-summary-not-company">Somente contas empresa visualizam KPIs operacionais da empresa.</p>';
+  }
+
+  if (viewModel.summaryState === "error") {
+    return `<p role="alert" data-testid="operations-summary-error">${escapeHtml(viewModel.summaryError ?? "operations_summary_unavailable")}</p>`;
+  }
+
+  if (!viewModel.summary) {
+    return '<p data-testid="operations-summary-empty">Nenhum KPI operacional disponível para o recorte atual.</p>';
+  }
+
+  return `<div class="delivery-grid" data-testid="operations-summary-kpis">
+    <article class="delivery-section" data-testid="kpi-awaiting-acceptance">
+      <h3>Aguardando aceite</h3>
+      <strong>${viewModel.summary.kpis.awaitingAcceptance}</strong>
+    </article>
+    <article class="delivery-section" data-testid="kpi-waiting-queue">
+      <h3>Waiting queue</h3>
+      <strong>${viewModel.summary.kpis.waitingQueue}</strong>
+    </article>
+    <article class="delivery-section" data-testid="kpi-failed-attempts">
+      <h3>Tentativas falhas</h3>
+      <strong>${viewModel.summary.kpis.failedAttempts}</strong>
+    </article>
+    <article class="delivery-section" data-testid="kpi-delivered">
+      <h3>Entregas concluídas</h3>
+      <strong>${viewModel.summary.kpis.delivered}</strong>
+    </article>
+    <article class="delivery-section" data-testid="kpi-active-drivers">
+      <h3>Entregadores ativos</h3>
+      <strong>${viewModel.summary.kpis.activeDrivers}</strong>
+    </article>
+    <article class="delivery-section" data-testid="kpi-on-time">
+      <h3>On-time</h3>
+      <div><code data-testid="kpi-on-time-state">${escapeHtml(viewModel.summary.onTime.state)}</code></div>
+      <div data-testid="kpi-on-time-value">${viewModel.summary.onTime.value === undefined ? "n/a" : `${viewModel.summary.onTime.value.toFixed(1)}%`}</div>
+      <small data-testid="kpi-on-time-reason">${escapeHtml(viewModel.summary.onTime.reason)}</small>
+    </article>
+  </div>`;
+};
+
+const renderDriversOperational = (viewModel: DashboardCompanyViewModel) => {
+  const drivers = viewModel.driversOperational ?? [];
+
+  if (viewModel.driversState === "not-company") {
+    return '<p data-testid="drivers-operational-not-company">Somente contas empresa visualizam a disponibilidade operacional dos entregadores.</p>';
+  }
+
+  if (viewModel.driversState === "error") {
+    return `<p role="alert" data-testid="drivers-operational-error">${escapeHtml(viewModel.driversError ?? "drivers_operational_unavailable")}</p>`;
+  }
+
+  if (drivers.length === 0) {
+    return '<p data-testid="drivers-operational-empty">Nenhum entregador operacional encontrado para esta empresa.</p>';
+  }
+
+  return `<ul data-testid="drivers-operational-list">${drivers
+    .map(
+      (driver) => `<li data-testid="driver-operational-${escapeHtml(driver.driverId)}">
+        <article class="delivery-card-inner">
+          <header class="delivery-header">
+            <div>
+              <strong>${escapeHtml(driver.driverName)}</strong>
+              <div>driverId: <code>${escapeHtml(driver.driverId)}</code></div>
+            </div>
+            <div><code data-testid="driver-operational-state">${escapeHtml(operationalStateCopy[driver.operationalState] ?? driver.operationalState)}</code></div>
+          </header>
+          <div class="delivery-meta-grid">
+            <div>status vínculo: <code data-testid="driver-operational-bond-status">${escapeHtml(bondStatusCopy[driver.bondStatus] ?? driver.bondStatus)}</code></div>
+            <div>strikes: <code data-testid="driver-operational-strike-count">${driver.strikeCount}</code></div>
+            <div>consequência: <code data-testid="driver-operational-strike-consequence">${escapeHtml(driver.strikeConsequence ? (strikeConsequenceCopy[driver.strikeConsequence] ?? driver.strikeConsequence) : "n/a")}</code></div>
+            <div>ofertas pendentes: <code data-testid="driver-operational-pending-offers">${driver.pendingOfferCount}</code></div>
+            <div>entregas ativas: <code data-testid="driver-operational-active-deliveries">${driver.activeDeliveriesCount}</code></div>
+            <div>falhas: <code data-testid="driver-operational-failed-attempts">${driver.failedAttemptsCount}</code></div>
+            <div>última oferta: <code data-testid="driver-operational-last-offer">${escapeHtml(formatDate(driver.lastOfferAt))}</code></div>
+            <div>última resolução: <code data-testid="driver-operational-last-resolution">${escapeHtml(formatDate(driver.lastResolution))}</code></div>
+          </div>
+        </article>
+      </li>`
+    )
     .join("")}</ul>`;
 };
 
@@ -439,6 +533,8 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
           <li>invitationsState: <code data-testid="invitations-state">${escapeHtml(viewModel.invitations.state)}</code></li>
           <li>retailerDeliveriesState: <code data-testid="retailer-deliveries-state">${escapeHtml(viewModel.retailerDeliveries.state)}</code></li>
           <li>companyDeliveriesState: <code data-testid="company-deliveries-state">${escapeHtml(viewModel.companyDeliveries.state)}</code></li>
+          <li>summaryState: <code data-testid="summary-state">${escapeHtml(viewModel.summaryState)}</code></li>
+          <li>driversState: <code data-testid="drivers-state">${escapeHtml(viewModel.driversState)}</code></li>
           <li>driverDeliveriesState: <code data-testid="driver-deliveries-state">${escapeHtml(viewModel.driverDeliveries.state)}</code></li>
         </ul>
       </section>
@@ -540,6 +636,16 @@ export const renderDashboardPage = (viewModel: DashboardCompanyViewModel) => `<!
           <button type="submit" data-testid="generate-invitation-button">Gerar link de convite</button>
         </form>
         ${renderInvitationItems(viewModel.invitations.invitations, "Nenhum convite gerado no momento.")}
+      </section>
+      <section class="card ${viewModel.summaryState === "error" ? "status-error" : viewModel.summaryState === "empty" ? "status-empty" : ""}">
+        <h2>KPIs operacionais (empresa)</h2>
+        <p>Resumo SSR com indicadores mínimos de dispatch e estado explícito de on-time.</p>
+        ${renderOperationsSummary(viewModel)}
+      </section>
+      <section class="card ${viewModel.driversState === "error" ? "status-error" : viewModel.driversState === "empty" ? "status-empty" : ""}">
+        <h2>Disponibilidade operacional dos entregadores</h2>
+        <p>Estado company-scoped por entregador com vínculo, strikes e atividade recente.</p>
+        ${renderDriversOperational(viewModel)}
       </section>
       <section class="card ${viewModel.companyDeliveries.state === "error" ? "status-error" : viewModel.companyDeliveries.state === "empty" ? "status-empty" : ""}">
         <h2>Fila operacional da empresa</h2>

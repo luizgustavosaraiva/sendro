@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
 import {
   assertDb,
   companies,
@@ -27,6 +27,10 @@ import type {
   DispatchWaitingReason,
   DriverStrike,
   EntityRole,
+  OperationsSummary,
+  OperationsSummaryFiltersInput,
+  OperationsSummaryWindow,
+  CompanyDriverOperationalState,
   ReprocessDispatchTimeoutsInput,
   ReprocessDispatchTimeoutsResult,
   ResolveDriverOfferInput,
@@ -86,6 +90,18 @@ const DISPATCH_ASSUMPTIONS = [
   "distance is approximated by stable lexical proxy because geo coordinates are not available yet",
   "region is approximated by shared pickup/dropoff text tokens until explicit region modeling lands",
   "price uses a neutral placeholder score until company pricing rules exist in later milestones"
+] as const;
+
+const OPERATIONS_SUMMARY_ASSUMPTIONS = [
+  "on-time percentage is unavailable until SLA policy windows are modeled in a later slice",
+  "awaitingAcceptance and waitingQueue are derived from live dispatch_queue_entries phases",
+  "failedAttempts is derived from dispatch_attempts rejected/expired statuses scoped to company",
+  "activeDrivers is derived from active company-driver bonds only"
+] as const;
+
+const DRIVER_OPERATIONAL_ASSUMPTIONS = [
+  "driver operational state is derived from company-scoped bond status plus dispatch attempt activity",
+  "no global driver lifecycle flag is used for company operations availability"
 ] as const;
 
 const DRIVER_REJECTION_REASON = "driver_rejected_offer";
@@ -1331,6 +1347,212 @@ export const reprocessDispatchTimeouts = async (input: {
       deliveryIds: [...touchedDeliveryIds]
     };
   });
+};
+
+const resolveOperationsWindowStart = (window: OperationsSummaryWindow): Date | null => {
+  if (window === "last_24h") {
+    return new Date(Date.now() - 24 * 60 * 60 * 1000);
+  }
+
+  return null;
+};
+
+const toCount = (value: unknown): number => {
+  if (typeof value === "number") return value;
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  return 0;
+};
+
+export const getOperationsSummary = async (input: {
+  user: SessionUser;
+  data?: OperationsSummaryFiltersInput;
+}): Promise<OperationsSummary> => {
+  const { db } = assertDb();
+  requireRole(input.user, "company");
+  const company = await resolveAuthenticatedCompanyProfile(input.user);
+  const window = input.data?.window ?? "all_time";
+  const windowStart = resolveOperationsWindowStart(window);
+
+  try {
+    const queuePredicates = [eq(dispatchQueueEntries.companyId, company.id)];
+    const attemptsPredicates = [eq(dispatchAttempts.companyId, company.id), inArray(dispatchAttempts.offerStatus, ["rejected", "expired"])];
+    const deliveredPredicates = [eq(deliveries.companyId, company.id), eq(deliveries.status, "delivered")];
+
+    if (windowStart) {
+      attemptsPredicates.push(gte(dispatchAttempts.createdAt, windowStart));
+      deliveredPredicates.push(gte(deliveries.deliveredAt, windowStart));
+    }
+
+    const [queueKpis, failedAttemptsRow, deliveredRow, activeDriversRow] = await Promise.all([
+      db
+        .select({
+          awaitingAcceptance: sql<number>`count(*) filter (where ${dispatchQueueEntries.phase} = 'offered')::int`,
+          waitingQueue: sql<number>`count(*) filter (where ${dispatchQueueEntries.phase} = 'waiting')::int`
+        })
+        .from(dispatchQueueEntries)
+        .where(and(...queuePredicates)),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(dispatchAttempts)
+        .where(and(...attemptsPredicates)),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(deliveries)
+        .where(and(...deliveredPredicates)),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(bonds)
+        .where(and(eq(bonds.companyId, company.id), eq(bonds.entityType, "driver"), eq(bonds.status, "active")))
+    ]);
+
+    return {
+      generatedAt: toIso(new Date()),
+      window,
+      assumptions: [...OPERATIONS_SUMMARY_ASSUMPTIONS],
+      onTime: {
+        state: "unavailable_policy_pending",
+        reason: "on_time_policy_window_not_modeled"
+      },
+      kpis: {
+        awaitingAcceptance: toCount(queueKpis[0]?.awaitingAcceptance),
+        waitingQueue: toCount(queueKpis[0]?.waitingQueue),
+        failedAttempts: toCount(failedAttemptsRow[0]?.count),
+        delivered: toCount(deliveredRow[0]?.count),
+        activeDrivers: toCount(activeDriversRow[0]?.count)
+      }
+    };
+  } catch {
+    throw deliveryError("INTERNAL_SERVER_ERROR", "deliveries_operations_summary_failed");
+  }
+};
+
+export const listCompanyDriversOperational = async (input: {
+  user: SessionUser;
+}): Promise<CompanyDriverOperationalState[]> => {
+  const { db } = assertDb();
+  requireRole(input.user, "company");
+  const company = await resolveAuthenticatedCompanyProfile(input.user);
+
+  try {
+    const rows = await db
+      .select({ bond: bonds, driver: drivers })
+      .from(bonds)
+      .innerJoin(drivers, eq(drivers.id, bonds.entityId))
+      .where(and(eq(bonds.companyId, company.id), eq(bonds.entityType, "driver")))
+      .orderBy(asc(drivers.name), asc(bonds.createdAt));
+
+    if (rows.length === 0) {
+      return [];
+    }
+
+    const byDriver = new Map<string, (typeof rows)[number]>();
+    for (const row of rows) {
+      if (!byDriver.has(row.driver.id)) {
+        byDriver.set(row.driver.id, row);
+      }
+    }
+
+    const driverIds = [...byDriver.keys()];
+
+    const [attemptRows, strikeRows, activeDeliveryRows] = await Promise.all([
+      db
+        .select()
+        .from(dispatchAttempts)
+        .where(and(eq(dispatchAttempts.companyId, company.id), inArray(dispatchAttempts.driverId, driverIds))),
+      db
+        .select()
+        .from(driverStrikes)
+        .where(and(eq(driverStrikes.companyId, company.id), inArray(driverStrikes.driverId, driverIds)))
+        .orderBy(desc(driverStrikes.createdAt)),
+      db
+        .select({
+          driverId: deliveries.driverId,
+          count: sql<number>`count(*)::int`
+        })
+        .from(deliveries)
+        .where(
+          and(
+            eq(deliveries.companyId, company.id),
+            inArray(deliveries.driverId, driverIds),
+            inArray(deliveries.status, ["accepted", "picked_up", "in_transit"])
+          )
+        )
+        .groupBy(deliveries.driverId)
+    ]);
+
+    const attemptsByDriver = new Map<string, DispatchAttemptRecord[]>();
+    for (const attempt of attemptRows) {
+      if (!attempt.driverId) continue;
+      const list = attemptsByDriver.get(attempt.driverId) ?? [];
+      list.push(attempt);
+      attemptsByDriver.set(attempt.driverId, list);
+    }
+
+    const strikesByDriver = new Map<string, DriverStrikeRecord[]>();
+    for (const strike of strikeRows) {
+      const list = strikesByDriver.get(strike.driverId) ?? [];
+      list.push(strike);
+      strikesByDriver.set(strike.driverId, list);
+    }
+
+    const activeDeliveriesByDriver = new Map<string, number>();
+    for (const row of activeDeliveryRows) {
+      if (!row.driverId) continue;
+      activeDeliveriesByDriver.set(row.driverId, toCount(row.count));
+    }
+
+    return driverIds.map((driverId) => {
+      const row = byDriver.get(driverId)!;
+      const attempts = attemptsByDriver.get(driverId) ?? [];
+      const strikes = strikesByDriver.get(driverId) ?? [];
+      const pendingOfferCount = attempts.filter((attempt) => attempt.offerStatus === "pending").length;
+      const failedAttemptsCount = attempts.filter((attempt) => attempt.offerStatus === "rejected" || attempt.offerStatus === "expired").length;
+      const latestOffer = attempts
+        .map((attempt) => attempt.createdAt)
+        .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
+      const latestResolution = attempts
+        .map((attempt) => attempt.resolvedAt)
+        .filter((value): value is Date => Boolean(value))
+        .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0];
+      const activeDeliveriesCount = activeDeliveriesByDriver.get(driverId) ?? 0;
+
+      const operationalState: CompanyDriverOperationalState["operationalState"] =
+        row.bond.status === "revoked"
+          ? "revoked"
+          : row.bond.status === "suspended"
+            ? "suspended"
+            : row.bond.status === "pending"
+              ? "pending_bond"
+              : pendingOfferCount > 0
+                ? "offered"
+                : activeDeliveriesCount > 0
+                  ? "busy"
+                  : "available";
+
+      return {
+        driverId: row.driver.id,
+        driverName: row.driver.name,
+        companyId: row.bond.companyId,
+        bondId: row.bond.id,
+        bondStatus: row.bond.status,
+        operationalState,
+        lastOfferAt: latestOffer ? toIso(latestOffer) : null,
+        lastResolution: latestResolution ? toIso(latestResolution) : null,
+        strikeCount: strikes.length,
+        strikeConsequence: strikes[0]?.consequence ?? null,
+        pendingOfferCount,
+        activeDeliveriesCount,
+        failedAttemptsCount,
+        assumptions: [...DRIVER_OPERATIONAL_ASSUMPTIONS]
+      };
+    });
+  } catch {
+    throw deliveryError("INTERNAL_SERVER_ERROR", "deliveries_company_drivers_operational_failed");
+  }
 };
 
 export const createDelivery = async (input: {

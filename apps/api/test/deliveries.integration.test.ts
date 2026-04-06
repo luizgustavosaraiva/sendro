@@ -55,6 +55,11 @@ const listUrl = (input?: object) =>
 const detailUrl = (deliveryId: string) =>
   `/trpc/deliveries.detail?input=${encodeURIComponent(JSON.stringify({ deliveryId }))}`;
 
+const operationsSummaryUrl = (input?: object) =>
+  input
+    ? `/trpc/deliveries.operationsSummary?input=${encodeURIComponent(JSON.stringify(input))}`
+    : "/trpc/deliveries.operationsSummary";
+
 describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
   let app: FastifyInstance;
 
@@ -163,14 +168,22 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     ]);
     expect(created.dispatch.attempts[0].offerStatus).toBe("pending");
 
-    const acceptedResponse = await driverAgentA
+    const offeredDriverAgent =
+      created.dispatch.offeredDriverId === driverProfileA.id
+        ? driverAgentA
+        : created.dispatch.offeredDriverId === driverProfileB.id
+          ? driverAgentB
+          : null;
+    expect(offeredDriverAgent).toBeTruthy();
+
+    const acceptedResponse = await offeredDriverAgent!
       .post("/trpc/deliveries.resolveOffer")
       .set("origin", "http://localhost:3000")
       .send({ deliveryId: created.deliveryId, decision: "accept" });
     expect(acceptedResponse.status, acceptedResponse.text).toBe(200);
     const accepted = trpcJson(acceptedResponse);
     expect(accepted.delivery.status).toBe("accepted");
-    expect(accepted.delivery.driverId).toBe(driverProfileA.id);
+    expect(accepted.delivery.driverId).toBe(created.dispatch.offeredDriverId);
     expect(accepted.delivery.dispatch.phase).toBe("completed");
     expect(accepted.delivery.dispatch.attempts[0].offerStatus).toBe("accepted");
     expect(accepted.delivery.timeline.map((event: { status: string }) => event.status)).toEqual([
@@ -190,7 +203,15 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(retailerListResponse.status, retailerListResponse.text).toBe(200);
     expect(trpcJson(retailerListResponse)).toHaveLength(1);
 
-    const driverListResponse = await driverAgentA.get(listUrl()).set("origin", "http://localhost:3000");
+    const acceptedDriverAgent =
+      accepted.delivery.driverId === driverProfileA.id
+        ? driverAgentA
+        : accepted.delivery.driverId === driverProfileB.id
+          ? driverAgentB
+          : null;
+    expect(acceptedDriverAgent).toBeTruthy();
+
+    const driverListResponse = await acceptedDriverAgent!.get(listUrl()).set("origin", "http://localhost:3000");
     expect(driverListResponse.status, driverListResponse.text).toBe(200);
     const driverList = trpcJson(driverListResponse);
     expect(driverList).toHaveLength(1);
@@ -381,6 +402,212 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(matchingBonds).toHaveLength(1);
   }, 30000);
 
+  it("exposes company-scoped operational summary and driver availability with deterministic auth/input failures", async () => {
+    const { db } = assertDb();
+    const suffix = Date.now() + 15;
+
+    const companyAgent = await registerAndLogin(app, {
+      role: "company",
+      name: "Company Ops",
+      email: `company.ops.${suffix}@sendro.test`,
+      companyName: "Company Ops"
+    });
+
+    const secondCompanyAgent = await registerAndLogin(app, {
+      role: "company",
+      name: "Company Ops Foreign",
+      email: `company.ops.foreign.${suffix}@sendro.test`,
+      companyName: "Company Ops Foreign"
+    });
+
+    const retailerAgent = await registerAndLogin(app, {
+      role: "retailer",
+      name: "Retailer Ops",
+      email: `retailer.ops.${suffix}@sendro.test`,
+      retailerName: "Retailer Ops"
+    });
+
+    const driverAgentA = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Ops A",
+      email: `driver.ops.a.${suffix}@sendro.test`,
+      driverName: "Driver Ops A",
+      phone: `+5591${String(suffix).slice(-8)}`
+    });
+
+    const driverAgentB = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Ops B",
+      email: `driver.ops.b.${suffix}@sendro.test`,
+      driverName: "Driver Ops B",
+      phone: `+5592${String(suffix).slice(-8)}`
+    });
+
+    const companyProfile = trpcJson(await companyAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const secondCompanyProfile = trpcJson(
+      await secondCompanyAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")
+    ).profile;
+    const retailerProfile = trpcJson(await retailerAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const driverProfileA = trpcJson(await driverAgentA.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const driverProfileB = trpcJson(await driverAgentB.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+
+    const [retailerUser] = await db.select().from(users).where(eq(users.email, `retailer.ops.${suffix}@sendro.test`)).limit(1);
+
+    await db.insert(bonds).values([
+      {
+        companyId: companyProfile.id,
+        entityId: retailerProfile.id,
+        entityType: "retailer",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: companyProfile.id,
+        entityId: driverProfileA.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: companyProfile.id,
+        entityId: driverProfileB.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: secondCompanyProfile.id,
+        entityId: driverProfileA.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      }
+    ]);
+
+    const createOne = await retailerAgent
+      .post("/trpc/deliveries.create")
+      .set("origin", "http://localhost:3000")
+      .send({ companyId: companyProfile.id, externalReference: `OPS-ONE-${suffix}` });
+    expect(createOne.status, createOne.text).toBe(200);
+    const createdOne = trpcJson(createOne);
+
+    const createTwo = await retailerAgent
+      .post("/trpc/deliveries.create")
+      .set("origin", "http://localhost:3000")
+      .send({ companyId: companyProfile.id, externalReference: `OPS-TWO-${suffix}` });
+    expect(createTwo.status, createTwo.text).toBe(200);
+    const createdTwo = trpcJson(createTwo);
+
+    const offerAgentByDriverId = new Map<string, ReturnType<typeof request.agent>>([
+      [driverProfileA.id, driverAgentA],
+      [driverProfileB.id, driverAgentB]
+    ]);
+
+    const rejectOneAgent = offerAgentByDriverId.get(createdOne.dispatch.offeredDriverId);
+    expect(rejectOneAgent).toBeTruthy();
+    const rejectOne = await rejectOneAgent!
+      .post("/trpc/deliveries.resolveOffer")
+      .set("origin", "http://localhost:3000")
+      .send({ deliveryId: createdOne.deliveryId, decision: "reject", reason: "capacity_full" });
+    expect(rejectOne.status, rejectOne.text).toBe(200);
+
+    const acceptTwoAgent = offerAgentByDriverId.get(createdTwo.dispatch.offeredDriverId);
+    expect(acceptTwoAgent).toBeTruthy();
+    const acceptTwo = await acceptTwoAgent!
+      .post("/trpc/deliveries.resolveOffer")
+      .set("origin", "http://localhost:3000")
+      .send({ deliveryId: createdTwo.deliveryId, decision: "accept" });
+    expect(acceptTwo.status, acceptTwo.text).toBe(200);
+
+    const malformedWindow = await companyAgent
+      .get(operationsSummaryUrl({ window: "invalid_window" }))
+      .set("origin", "http://localhost:3000");
+    expect(malformedWindow.status).toBe(400);
+
+    const forbiddenSummary = await retailerAgent.get(operationsSummaryUrl()).set("origin", "http://localhost:3000");
+    expect(forbiddenSummary.status).toBe(403);
+    expect(trpcErrorMessage(forbiddenSummary)).toContain("bond_role_forbidden:company_required");
+
+    const summaryResponse = await companyAgent
+      .get(operationsSummaryUrl({ window: "all_time" }))
+      .set("origin", "http://localhost:3000");
+    expect(summaryResponse.status, summaryResponse.text).toBe(200);
+    const summary = trpcJson(summaryResponse);
+    expect(summary.generatedAt).toEqual(expect.any(String));
+    expect(summary.window).toBe("all_time");
+    expect(summary.onTime).toEqual({
+      state: "unavailable_policy_pending",
+      reason: "on_time_policy_window_not_modeled"
+    });
+    expect(summary.kpis).toMatchObject({
+      awaitingAcceptance: 1,
+      failedAttempts: 1,
+      delivered: 0,
+      activeDrivers: 2
+    });
+
+    const foreignSummaryResponse = await secondCompanyAgent
+      .get(operationsSummaryUrl({ window: "all_time" }))
+      .set("origin", "http://localhost:3000");
+    expect(foreignSummaryResponse.status, foreignSummaryResponse.text).toBe(200);
+    const foreignSummary = trpcJson(foreignSummaryResponse);
+    expect(foreignSummary.kpis.waitingQueue).toBe(0);
+    expect(foreignSummary.kpis.failedAttempts).toBe(0);
+    expect(foreignSummary.kpis.activeDrivers).toBe(1);
+
+    const forbiddenDrivers = await retailerAgent
+      .get("/trpc/deliveries.companyDriversOperational")
+      .set("origin", "http://localhost:3000");
+    expect(forbiddenDrivers.status).toBe(403);
+    expect(trpcErrorMessage(forbiddenDrivers)).toContain("bond_role_forbidden:company_required");
+
+    const driversResponse = await companyAgent
+      .get("/trpc/deliveries.companyDriversOperational")
+      .set("origin", "http://localhost:3000");
+    expect(driversResponse.status, driversResponse.text).toBe(200);
+    const drivers = trpcJson(driversResponse);
+    expect(drivers).toHaveLength(2);
+    expect(drivers.map((row: { companyId: string }) => row.companyId)).toEqual([
+      companyProfile.id,
+      companyProfile.id
+    ]);
+
+    const driverAState = drivers.find((row: { driverId: string }) => row.driverId === driverProfileA.id);
+    const driverBState = drivers.find((row: { driverId: string }) => row.driverId === driverProfileB.id);
+    expect(driverAState?.bondStatus).toBe("active");
+    expect(driverBState?.bondStatus).toBe("active");
+    expect(drivers.filter((row: { strikeCount: number }) => row.strikeCount > 0)).toHaveLength(1);
+    expect(drivers.some((row: { strikeConsequence: string | null }) => row.strikeConsequence === "warning")).toBe(true);
+    expect(drivers.some((row: { operationalState: string }) => row.operationalState === "busy")).toBe(true);
+    expect(drivers.some((row: { operationalState: string }) => row.operationalState === "offered")).toBe(true);
+
+    const emptyCompanyAgent = await registerAndLogin(app, {
+      role: "company",
+      name: "Company Ops Empty",
+      email: `company.ops.empty.${suffix}@sendro.test`,
+      companyName: "Company Ops Empty"
+    });
+
+    const emptySummaryResponse = await emptyCompanyAgent
+      .get(operationsSummaryUrl({ window: "all_time" }))
+      .set("origin", "http://localhost:3000");
+    expect(emptySummaryResponse.status, emptySummaryResponse.text).toBe(200);
+    expect(trpcJson(emptySummaryResponse).kpis).toEqual({
+      awaitingAcceptance: 0,
+      waitingQueue: 0,
+      failedAttempts: 0,
+      delivered: 0,
+      activeDrivers: 0
+    });
+    expect(trpcJson(emptySummaryResponse).onTime.state).toBe("unavailable_policy_pending");
+
+    const emptyDriversResponse = await emptyCompanyAgent
+      .get("/trpc/deliveries.companyDriversOperational")
+      .set("origin", "http://localhost:3000");
+    expect(emptyDriversResponse.status, emptyDriversResponse.text).toBe(200);
+    expect(trpcJson(emptyDriversResponse)).toEqual([]);
+  }, 30000);
+
   it("completes an in-flight delivery atomically with proof snapshot and delivered event sequence", async () => {
     const { db } = assertDb();
     const suffix = Date.now() + 2;
@@ -474,6 +701,18 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(missingProofResponse.status).toBe(400);
     expect(trpcErrorMessage(missingProofResponse)).toContain("delivery_proof_photo_required");
 
+    const missingNoteResponse = await driverAgent
+      .post("/trpc/deliveries.complete")
+      .set("origin", "http://localhost:3000")
+      .send({
+        deliveryId: created.deliveryId,
+        proof: {
+          photoUrl: "https://cdn.sendro.test/proofs/pod-missing-note.jpg"
+        }
+      });
+    expect(missingNoteResponse.status).toBe(400);
+    expect(trpcErrorMessage(missingNoteResponse)).toContain("delivery_proof_note_required");
+
     const forbiddenResponse = await otherDriverAgent
       .post("/trpc/deliveries.complete")
       .set("origin", "http://localhost:3000")
@@ -486,6 +725,15 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       });
     expect(forbiddenResponse.status).toBe(403);
     expect(trpcErrorMessage(forbiddenResponse)).toContain("delivery_driver_forbidden");
+
+    const detailBeforeCompletion = await retailerAgent.get(detailUrl(created.deliveryId)).set("origin", "http://localhost:3000");
+    expect(detailBeforeCompletion.status, detailBeforeCompletion.text).toBe(200);
+    expect(trpcJson(detailBeforeCompletion).timeline.map((event: { status: string }) => event.status)).toEqual([
+      "created",
+      "queued",
+      "offered",
+      "accepted"
+    ]);
 
     const completeResponse = await driverAgent
       .post("/trpc/deliveries.complete")
