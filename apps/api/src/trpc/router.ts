@@ -57,6 +57,7 @@ import {
   redeemInvitation
 } from "../lib/invitations";
 import { protectedProcedure, publicProcedure, router } from "./procedures";
+import { whatsappRouter } from "./whatsapp-router";
 
 export const appRouter = router({
   user: router({
@@ -162,7 +163,8 @@ export const appRouter = router({
       .input(reprocessDispatchTimeoutsSchema.optional())
       .output(reprocessDispatchTimeoutsResultSchema)
       .mutation(async ({ ctx, input }) => reprocessDispatchTimeouts({ user: ctx.session.user as never, data: input }))
-  })
+  }),
+  whatsapp: whatsappRouter
 });
 
 export type AppRouter = typeof appRouter;

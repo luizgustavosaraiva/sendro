@@ -8,6 +8,7 @@ import { auth } from "./auth";
 import { env } from "./env";
 import { lookupInvitationByToken } from "./lib/invitations";
 import { ensureProfileForUser } from "./routes/auth/register";
+import { registerWhatsAppWebhook } from "./routes/whatsapp/webhook";
 import { appRouter } from "./trpc/router";
 import { createTrpcContext } from "./trpc/context";
 
@@ -187,8 +188,44 @@ const ensureDispatchSchemaForTests = async () => {
   await dispatchSchemaInitPromise;
 };
 
+let whatsappSchemaInitPromise: Promise<void> | null = null;
+
+const ensureWhatsappSchemaForTests = async () => {
+  if (env.NODE_ENV !== "test") return;
+  if (!whatsappSchemaInitPromise) {
+    whatsappSchemaInitPromise = (async () => {
+      const { pool } = assertDb();
+      const client = await pool.connect();
+      try {
+        await client.query(`
+          create table if not exists whatsapp_sessions (
+            id uuid primary key default gen_random_uuid() not null,
+            company_id uuid not null references companies(id) on delete cascade,
+            instance_name varchar(255) not null,
+            status varchar(32) not null default 'disconnected',
+            qr_code text,
+            provider varchar(32) not null default 'evolution-go',
+            last_error text,
+            connected_at timestamp with time zone,
+            disconnected_at timestamp with time zone,
+            created_at timestamp with time zone default now() not null,
+            updated_at timestamp with time zone default now() not null
+          )
+        `);
+        await client.query(
+          "create unique index if not exists whatsapp_sessions_company_unique on whatsapp_sessions (company_id)"
+        );
+      } finally {
+        client.release();
+      }
+    })();
+  }
+  await whatsappSchemaInitPromise;
+};
+
 export const buildApp = async () => {
   await ensureDispatchSchemaForTests();
+  await ensureWhatsappSchemaForTests();
 
   const app = Fastify({ logger: env.NODE_ENV !== "test" });
 
@@ -198,6 +235,8 @@ export const buildApp = async () => {
   });
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  registerWhatsAppWebhook(app);
 
   app.get("/api/invitations/:token", async (request, reply) => {
     const { token } = request.params as { token: string };
