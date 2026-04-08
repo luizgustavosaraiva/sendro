@@ -13,6 +13,7 @@ import {
   pricingRules
 } from "@repo/db";
 import { notifyDriverOfferViaWhatsApp } from "./whatsapp/notifications";
+import { resolveDeliveryPricingAttributes, resolvePricingMatch } from "./pricing-match";
 import type {
   DeliveryDispatchAttempt,
   DeliveryDispatchState,
@@ -430,83 +431,10 @@ const normalizedTextScore = (value: string | null | undefined) => {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 };
 
-type DeliveryPricingAttributes = {
-  region: string;
-  deliveryType: string;
-  weightGrams: number;
-};
-
 type PricingMatchResult = {
   score: number;
   assumption: string;
   diagnostic: string;
-};
-
-const asString = (value: unknown): string | null => {
-  if (typeof value !== "string") {
-    return null;
-  }
-
-  const normalized = value.trim();
-  return normalized.length > 0 ? normalized : null;
-};
-
-const asFiniteNumber = (value: unknown): number | null => {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : null;
-  }
-
-  if (typeof value === "string") {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  return null;
-};
-
-const resolveDeliveryPricingAttributes = (delivery: DeliveryRecord): DeliveryPricingAttributes | null => {
-  const metadata = asMetadata(delivery.metadata);
-  const region = asString(metadata.region) ?? asString(metadata.pricingRegion) ?? asString(metadata.destinationRegion);
-  const deliveryType =
-    asString(metadata.deliveryType) ?? asString(metadata.delivery_type) ?? asString(metadata.serviceLevel);
-  const weightGrams =
-    asFiniteNumber(metadata.weightGrams) ??
-    asFiniteNumber(metadata.weight_grams) ??
-    asFiniteNumber(metadata.packageWeightGrams);
-
-  if (!region || !deliveryType || weightGrams === null || weightGrams < 0) {
-    return null;
-  }
-
-  return {
-    region,
-    deliveryType,
-    weightGrams
-  };
-};
-
-const chooseBestPricingRule = (rows: Array<typeof pricingRules.$inferSelect>) => {
-  if (rows.length === 0) {
-    return null;
-  }
-
-  const sorted = [...rows].sort((left, right) => {
-    const leftSpan = (left.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) - left.weightMinGrams;
-    const rightSpan = (right.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) - right.weightMinGrams;
-
-    if (leftSpan !== rightSpan) return leftSpan - rightSpan;
-    if (left.weightMinGrams !== right.weightMinGrams) return right.weightMinGrams - left.weightMinGrams;
-    if ((left.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) !== (right.weightMaxGrams ?? Number.MAX_SAFE_INTEGER)) {
-      return (left.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) - (right.weightMaxGrams ?? Number.MAX_SAFE_INTEGER);
-    }
-
-    const createdAtDiff = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-    if (createdAtDiff !== 0) return createdAtDiff;
-
-    return left.id.localeCompare(right.id);
-  });
-
-  return sorted[0] ?? null;
 };
 
 const resolvePriceMatchForDelivery = async (input: {
@@ -514,7 +442,7 @@ const resolvePriceMatchForDelivery = async (input: {
   companyId: string;
   delivery: DeliveryRecord;
 }): Promise<PricingMatchResult> => {
-  const attributes = resolveDeliveryPricingAttributes(input.delivery);
+  const attributes = resolveDeliveryPricingAttributes(input.delivery.metadata);
   if (!attributes) {
     return {
       score: 0,
@@ -538,19 +466,17 @@ const resolvePriceMatchForDelivery = async (input: {
       )
       .orderBy(asc(pricingRules.weightMinGrams), asc(pricingRules.weightMaxGrams), asc(pricingRules.createdAt));
 
-    const matchedRule = chooseBestPricingRule(candidateRules);
-    if (!matchedRule) {
-      return {
-        score: 0,
-        assumption: DISPATCH_ASSUMPTIONS[3],
-        diagnostic: "fallback:no_pricing_rule_match"
-      };
-    }
+    const match = resolvePricingMatch({
+      deliveryMetadata: input.delivery.metadata,
+      candidateRules
+    });
 
     return {
-      score: matchedRule.amountCents,
-      assumption: `${DISPATCH_ASSUMPTIONS[3]} (matched pricing rule ${matchedRule.id})`,
-      diagnostic: `matched_rule:${matchedRule.id}`
+      score: match.amountCents,
+      assumption: match.matchedRuleId
+        ? `${DISPATCH_ASSUMPTIONS[3]} (matched pricing rule ${match.matchedRuleId})`
+        : DISPATCH_ASSUMPTIONS[3],
+      diagnostic: match.diagnostic
     };
   } catch {
     return {
@@ -1567,7 +1493,9 @@ export const getOperationsSummary = async (input: {
         waitingQueue: toCount(queueKpis[0]?.waitingQueue),
         failedAttempts: toCount(failedAttemptsRow[0]?.count),
         delivered: toCount(deliveredRow[0]?.count),
-        activeDrivers: toCount(activeDriversRow[0]?.count)
+        activeDrivers: toCount(activeDriversRow[0]?.count),
+        grossRevenueCents: 0,
+        netRevenueCents: 0
       }
     };
   } catch {

@@ -226,7 +226,9 @@ export const operationsSummarySchema = z.object({
     waitingQueue: z.number().int().nonnegative(),
     failedAttempts: z.number().int().nonnegative(),
     delivered: z.number().int().nonnegative(),
-    activeDrivers: z.number().int().nonnegative()
+    activeDrivers: z.number().int().nonnegative(),
+    grossRevenueCents: z.number().int().nonnegative(),
+    netRevenueCents: z.number().int().nonnegative()
   })
 });
 

@@ -245,6 +245,8 @@ export type OperationsSummary = {
     failedAttempts: number;
     delivered: number;
     activeDrivers: number;
+    grossRevenueCents: number;
+    netRevenueCents: number;
   };
 };
 

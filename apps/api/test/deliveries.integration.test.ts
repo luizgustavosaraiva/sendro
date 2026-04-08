@@ -12,10 +12,13 @@ import {
   users
 } from "@repo/db";
 import {
+  billingReportListSchema,
+  billingReportSummarySchema,
   deliveryCompletionSchema,
   deliveryDetailSchema,
   deliveryProofSchema,
-  deliveryProofSubmissionSchema
+  deliveryProofSubmissionSchema,
+  operationsSummarySchema
 } from "@repo/shared";
 import { and, asc, eq } from "drizzle-orm";
 import { buildApp } from "../src/index";
@@ -543,7 +546,9 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       awaitingAcceptance: 1,
       failedAttempts: 1,
       delivered: 0,
-      activeDrivers: 2
+      activeDrivers: 2,
+      grossRevenueCents: 0,
+      netRevenueCents: 0
     });
 
     const foreignSummaryResponse = await secondCompanyAgent
@@ -554,6 +559,8 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(foreignSummary.kpis.waitingQueue).toBe(0);
     expect(foreignSummary.kpis.failedAttempts).toBe(0);
     expect(foreignSummary.kpis.activeDrivers).toBe(1);
+    expect(foreignSummary.kpis.grossRevenueCents).toBe(0);
+    expect(foreignSummary.kpis.netRevenueCents).toBe(0);
 
     const forbiddenDrivers = await retailerAgent
       .get("/trpc/deliveries.companyDriversOperational")
@@ -597,7 +604,9 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       waitingQueue: 0,
       failedAttempts: 0,
       delivered: 0,
-      activeDrivers: 0
+      activeDrivers: 0,
+      grossRevenueCents: 0,
+      netRevenueCents: 0
     });
     expect(trpcJson(emptySummaryResponse).onTime.state).toBe("unavailable_policy_pending");
 
@@ -804,6 +813,108 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(storedEvents.map((event) => event.sequence)).toEqual([1, 2, 3, 4, 5]);
     expect(storedEvents.at(-1)).toMatchObject({ status: "delivered", actorType: "driver", sequence: 5 });
   }, 30000);
+
+  it("enforces billing report schema bounds and explicit pricing diagnostics", async () => {
+    const now = new Date().toISOString();
+
+    const parsedInput = billingReportListSchema.parse({
+      periodStart: "2026-01-01T00:00:00.000Z",
+      periodEnd: "2026-01-31T23:59:59.999Z"
+    });
+    expect(parsedInput.page).toBe(1);
+    expect(parsedInput.limit).toBe(50);
+
+    const malformedPagination = billingReportListSchema.safeParse({
+      periodStart: "2026-01-01T00:00:00.000Z",
+      periodEnd: "2026-01-31T23:59:59.999Z",
+      page: 0,
+      limit: 1000
+    });
+    expect(malformedPagination.success).toBe(false);
+
+    const malformedPeriod = billingReportListSchema.safeParse({
+      periodStart: "2026-02-01T00:00:00.000Z",
+      periodEnd: "2026-01-31T23:59:59.999Z"
+    });
+    expect(malformedPeriod.success).toBe(false);
+
+    const parsedReport = billingReportSummarySchema.parse({
+      generatedAt: now,
+      periodStart: "2026-01-01T00:00:00.000Z",
+      periodEnd: "2026-01-31T23:59:59.999Z",
+      page: 1,
+      limit: 50,
+      totalRows: 1,
+      totalPages: 1,
+      totals: {
+        grossRevenueCents: 1400,
+        netRevenueCents: 1200
+      },
+      rows: [
+        {
+          deliveryId: "550e8400-e29b-41d4-a716-446655440061",
+          companyId: "550e8400-e29b-41d4-a716-446655440062",
+          deliveredAt: now,
+          region: "sao-paulo-centro",
+          deliveryType: "same_day",
+          weightGrams: 800,
+          matchedRuleId: "550e8400-e29b-41d4-a716-446655440063",
+          priceDiagnostic: "matched_rule:550e8400-e29b-41d4-a716-446655440063",
+          grossRevenueCents: 1400,
+          netRevenueCents: 1200
+        }
+      ]
+    });
+    expect(parsedReport.rows[0]?.priceDiagnostic).toContain("matched_rule:");
+
+    const malformedReport = billingReportSummarySchema.safeParse({
+      generatedAt: now,
+      periodStart: "2026-01-01T00:00:00.000Z",
+      periodEnd: "2026-01-31T23:59:59.999Z",
+      page: 1,
+      limit: 50,
+      totalRows: 1,
+      totalPages: 1,
+      totals: {
+        grossRevenueCents: 0,
+        netRevenueCents: 0
+      },
+      rows: [
+        {
+          deliveryId: "550e8400-e29b-41d4-a716-446655440061",
+          companyId: "550e8400-e29b-41d4-a716-446655440062",
+          deliveredAt: now,
+          region: null,
+          deliveryType: null,
+          weightGrams: null,
+          matchedRuleId: null,
+          grossRevenueCents: 0,
+          netRevenueCents: 0
+        }
+      ]
+    });
+    expect(malformedReport.success).toBe(false);
+
+    const parsedOperationsSummary = operationsSummarySchema.parse({
+      generatedAt: now,
+      window: "all_time",
+      assumptions: ["ops summary includes financials"],
+      onTime: {
+        state: "unavailable_policy_pending",
+        reason: "on_time_policy_window_not_modeled"
+      },
+      kpis: {
+        awaitingAcceptance: 0,
+        waitingQueue: 0,
+        failedAttempts: 0,
+        delivered: 0,
+        activeDrivers: 0,
+        grossRevenueCents: 0,
+        netRevenueCents: 0
+      }
+    });
+    expect(parsedOperationsSummary.kpis.grossRevenueCents).toBe(0);
+  });
 
   it("defines explicit proof-of-delivery validation and persistence fields without metadata blobs", async () => {
     const deliveredAt = new Date().toISOString();

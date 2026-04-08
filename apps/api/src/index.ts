@@ -262,8 +262,9 @@ export const buildApp = async () => {
 
   app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
     try {
-      (request as { rawBody?: string }).rawBody = body;
-      done(null, body.length > 0 ? JSON.parse(body) : {});
+      const rawBody = typeof body === "string" ? body : body.toString("utf8");
+      (request as { rawBody?: string }).rawBody = rawBody;
+      done(null, rawBody.length > 0 ? JSON.parse(rawBody) : {});
     } catch (error) {
       done(error as Error, undefined);
     }

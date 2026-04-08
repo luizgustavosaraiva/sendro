@@ -51,6 +51,51 @@ export const pricingRuleListSchema = z.object({
   deliveryType: trimmedLabel(80).optional()
 });
 
+export const billingReportListSchema = z
+  .object({
+    periodStart: z.string().datetime(),
+    periodEnd: z.string().datetime(),
+    page: z.number().int().min(1).default(1),
+    limit: z.number().int().min(1).max(200).default(50)
+  })
+  .superRefine((value, ctx) => {
+    if (new Date(value.periodStart).getTime() > new Date(value.periodEnd).getTime()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["periodEnd"],
+        message: "billing_report_period_invalid:start_after_end"
+      });
+    }
+  });
+
+export const billingReportRowSchema = z.object({
+  deliveryId: z.string().uuid(),
+  companyId: z.string().uuid(),
+  deliveredAt: z.string().datetime(),
+  region: z.string().nullable(),
+  deliveryType: z.string().nullable(),
+  weightGrams: z.number().nonnegative().nullable(),
+  matchedRuleId: z.string().uuid().nullable(),
+  priceDiagnostic: z.string().min(1),
+  grossRevenueCents: z.number().int().nonnegative(),
+  netRevenueCents: z.number().int().nonnegative()
+});
+
+export const billingReportSummarySchema = z.object({
+  generatedAt: z.string().datetime(),
+  periodStart: z.string().datetime(),
+  periodEnd: z.string().datetime(),
+  page: z.number().int().min(1),
+  limit: z.number().int().min(1).max(200),
+  totalRows: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
+  totals: z.object({
+    grossRevenueCents: z.number().int().nonnegative(),
+    netRevenueCents: z.number().int().nonnegative()
+  }),
+  rows: z.array(billingReportRowSchema)
+});
+
 export const pricingRuleSchema = z.object({
   ruleId: z.string().uuid(),
   companyId: z.string().uuid(),
