@@ -105,6 +105,8 @@ export const pricingRuleSchema = z.object({
   weightMaxGrams: z.number().int().positive().nullable(),
   amountCents: z.number().int().nonnegative(),
   currency: pricingRuleCurrencySchema,
+  stripeProductId: z.string().min(1).max(255).nullable().optional().default(null),
+  stripePriceId: z.string().min(1).max(255).nullable().optional().default(null),
   createdAt: z.string().datetime(),
   updatedAt: z.string().datetime()
 });

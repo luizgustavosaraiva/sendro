@@ -10,6 +10,8 @@ export type PricingRule = {
   weightMaxGrams: number | null;
   amountCents: number;
   currency: PricingRuleCurrency;
+  stripeProductId: string | null;
+  stripePriceId: string | null;
   createdAt: string;
   updatedAt: string;
 };

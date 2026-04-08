@@ -396,6 +396,8 @@ export const pricingRules = pgTable(
     weightMaxGrams: integer("weight_max_grams"),
     amountCents: integer("amount_cents").notNull(),
     currency: varchar("currency", { length: 3 }).default("BRL").notNull(),
+    stripeProductId: varchar("stripe_product_id", { length: 255 }),
+    stripePriceId: varchar("stripe_price_id", { length: 255 }),
     ...timestamps
   },
   (table) => ({

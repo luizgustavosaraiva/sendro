@@ -64,6 +64,13 @@
       "when": 1775618789038,
       "tag": "0008_stripe_connect_onboarding",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1775640000000,
+      "tag": "0009_pricing_rules_stripe_catalog",
+      "breakpoints": true
     }
   ]
 }

@@ -266,6 +266,30 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
     expect(parsedUpdate.weightMinGrams).toBe(1000);
     expect(parsedUpdate.weightMaxGrams).toBe(1000);
 
+    const parsedLegacyRule = pricingRuleSchema.parse({
+      ruleId: "550e8400-e29b-41d4-a716-446655440001",
+      companyId: "550e8400-e29b-41d4-a716-446655440002",
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightMinGrams: 0,
+      weightMaxGrams: null,
+      amountCents: 1000,
+      currency: "BRL",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z"
+    });
+
+    expect(parsedLegacyRule.stripeProductId).toBeNull();
+    expect(parsedLegacyRule.stripePriceId).toBeNull();
+
+    const invalidStripeIds = pricingRuleSchema.safeParse({
+      ...parsedLegacyRule,
+      stripeProductId: "",
+      stripePriceId: "   "
+    });
+
+    expect(invalidStripeIds.success).toBe(false);
+
     const invalidRange = pricingRuleCreateSchema.safeParse({
       region: "SP-CAPITAL",
       deliveryType: "same_day",
