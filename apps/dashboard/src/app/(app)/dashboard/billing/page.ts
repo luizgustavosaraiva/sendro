@@ -69,7 +69,7 @@ export const renderBillingPage = (viewModel: DashboardCompanyViewModel) => {
         : billing.state === "empty"
           ? `<p data-testid="billing-empty">Nenhuma regra de cobrança cadastrada para esta empresa.</p>`
           : `<table data-testid="billing-rules-table" border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;">
-              <thead><tr><th>Região</th><th>Tipo</th><th>Peso (g)</th><th>Preço</th></tr></thead>
+              <thead><tr><th>Região</th><th>Tipo</th><th>Peso (g)</th><th>Preço</th><th>Stripe Product</th><th>Stripe Price</th></tr></thead>
               <tbody>
                 ${billing.rules
                   .map(
@@ -78,6 +78,8 @@ export const renderBillingPage = (viewModel: DashboardCompanyViewModel) => {
                         <td>${escapeHtml(rule.deliveryType)}</td>
                         <td>${escapeHtml(rule.weightMinGrams)} - ${escapeHtml(rule.weightMaxGrams ?? "∞")}</td>
                         <td>${escapeHtml(formatMoney(rule.amountCents, rule.currency))}</td>
+                        <td data-testid="billing-rule-stripe-product-${escapeHtml(rule.ruleId)}">${escapeHtml(rule.stripeProductId ?? "n/a")}</td>
+                        <td data-testid="billing-rule-stripe-price-${escapeHtml(rule.ruleId)}">${escapeHtml(rule.stripePriceId ?? "n/a")}</td>
                       </tr>`
                   )
                   .join("")}

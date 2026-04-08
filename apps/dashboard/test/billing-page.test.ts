@@ -171,6 +171,8 @@ describe("billing SSR page", () => {
             weightMaxGrams: 10000,
             amountCents: 2590,
             currency: "BRL",
+            stripeProductId: "prod_sendro_440011",
+            stripePriceId: "price_sendro_2590",
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z"
           }
@@ -190,6 +192,8 @@ describe("billing SSR page", () => {
     expect(html).toContain('data-testid="billing-connect-error"');
     expect(html).toContain('data-testid="billing-form"');
     expect(html).toContain('data-testid="billing-rules-table"');
+    expect(html).toContain('data-testid="billing-rule-stripe-product-550e8400-e29b-41d4-a716-446655440011">prod_sendro_440011');
+    expect(html).toContain('data-testid="billing-rule-stripe-price-550e8400-e29b-41d4-a716-446655440011">price_sendro_2590');
   });
 
   it("renders report empty branch and pricing loaded branch independently", () => {
@@ -207,6 +211,8 @@ describe("billing SSR page", () => {
             weightMaxGrams: 5000,
             amountCents: 1290,
             currency: "BRL",
+            stripeProductId: null,
+            stripePriceId: null,
             createdAt: "2026-01-01T00:00:00.000Z",
             updatedAt: "2026-01-01T00:00:00.000Z"
           }
@@ -244,5 +250,7 @@ describe("billing SSR page", () => {
     expect(html).toContain('data-testid="billing-report-empty"');
     expect(html).toContain('data-testid="billing-kpis-empty"');
     expect(html).toContain('data-testid="billing-rules-table"');
+    expect(html).toContain('data-testid="billing-rule-stripe-product-550e8400-e29b-41d4-a716-446655440012">n/a');
+    expect(html).toContain('data-testid="billing-rule-stripe-price-550e8400-e29b-41d4-a716-446655440012">n/a');
   });
 });
