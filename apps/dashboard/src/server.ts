@@ -15,7 +15,8 @@ import {
   redeemInvitationByToken,
   getWhatsAppSessionStatus,
   connectWhatsApp,
-  disconnectWhatsApp
+  disconnectWhatsApp,
+  createBillingConnectOnboarding
 } from "./lib/trpc";
 import { env } from "./lib/env";
 
@@ -481,6 +482,36 @@ export const server = createServer(async (request, response) => {
       };
 
       await rerenderBilling(response, request.headers.cookie ?? null, { createPricingRule });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/billing/connect") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const refreshUrl = new URL("/dashboard/billing?connect=refresh", env.appUrl).toString();
+      const returnUrl = new URL("/dashboard/billing?connect=return", env.appUrl).toString();
+
+      try {
+        const onboarding = await createBillingConnectOnboarding({ refreshUrl, returnUrl }, request.headers.cookie ?? null);
+        if (!onboarding) {
+          await rerenderBilling(response, request.headers.cookie ?? null, {
+            billingConnectError: "A sessão foi resolvida, mas o onboarding Stripe Connect não pôde ser iniciado porque a autenticação SSR não foi aceita pela API."
+          });
+          return;
+        }
+
+        redirect(response, onboarding.onboardingUrl);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "billing_connect_onboarding_failed";
+        await rerenderBilling(response, request.headers.cookie ?? null, {
+          billingConnectError: `Falha ao iniciar onboarding Stripe Connect. Diagnóstico: ${detail}`
+        });
+      }
       return;
     }
 

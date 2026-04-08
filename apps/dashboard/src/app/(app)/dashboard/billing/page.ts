@@ -11,9 +11,37 @@ const escapeHtml = (value: string | number | boolean | null | undefined) =>
 const formatMoney = (amountCents: number, currency: string) => `${currency} ${(amountCents / 100).toFixed(2)}`;
 
 export const renderBillingPage = (viewModel: DashboardCompanyViewModel) => {
-  const billing = viewModel.billing ?? { state: "error", rules: [], error: "billing_state_missing" };
+  const billing = viewModel.billing ?? {
+    state: "error",
+    rules: [],
+    error: "billing_state_missing",
+    connect: { state: "error", error: "billing_connect_state_missing" }
+  };
 
-  const body = billing.state === "not-company"
+  const connect = billing.connect;
+
+  const connectBody = connect.state === "not-company"
+    ? `<p data-testid="billing-connect-not-company">Somente contas empresa podem conectar Stripe Connect.</p>`
+    : connect.state === "error"
+      ? `<p role="alert" data-testid="billing-connect-error">${escapeHtml(connect.error ?? "billing_connect_unavailable")}</p>`
+      : connect.status?.status === "connected"
+        ? `<p data-testid="billing-connect-connected">Conta conectada e com capacidades de cobrança/pagamento habilitadas.</p>
+           <p data-testid="billing-connect-capabilities">charges_enabled=${escapeHtml(connect.status.chargesEnabled)} payouts_enabled=${escapeHtml(connect.status.payoutsEnabled)}</p>
+           <p data-testid="billing-connect-account-id">Conta Stripe: ${escapeHtml(connect.status.stripeAccountId ?? "n/a")}</p>`
+        : `<p data-testid="billing-connect-pending">Conexão pendente. Complete o onboarding Stripe para habilitar cobranças e repasses.</p>
+           <p data-testid="billing-connect-capabilities">charges_enabled=${escapeHtml(connect.status?.chargesEnabled ?? false)} payouts_enabled=${escapeHtml(connect.status?.payoutsEnabled ?? false)}</p>
+           <p data-testid="billing-connect-account-id">Conta Stripe: ${escapeHtml(connect.status?.stripeAccountId ?? "ainda não criada")}</p>`;
+
+  const connectForm = connect.state === "not-company"
+    ? ""
+    : `<form method="post" action="/dashboard/billing/connect" data-testid="billing-connect-form" style="margin-top:12px;display:block;">
+        <button type="submit" data-testid="billing-connect-submit">Iniciar onboarding Stripe Connect</button>
+      </form>
+      <p data-testid="billing-connect-redirect-note" style="margin-top:10px;color:#cbd5e1;">
+        Você será redirecionado para uma página externa segura da Stripe para concluir o cadastro.
+      </p>`;
+
+  const pricingBody = billing.state === "not-company"
     ? `<p data-testid="billing-not-company">Somente contas empresa podem gerenciar regras de cobrança.</p>`
     : billing.state === "error"
       ? `<p role="alert" data-testid="billing-error">${escapeHtml(billing.error ?? "billing_unavailable")}</p>`
@@ -65,6 +93,12 @@ export const renderBillingPage = (viewModel: DashboardCompanyViewModel) => {
         ${billing.createFeedback ? `<p data-testid="billing-feedback">${escapeHtml(billing.createFeedback.message)}</p>` : ""}
       </section>
 
+      <section class="card" data-testid="billing-connect-panel">
+        <h2>Stripe Connect Express</h2>
+        ${connectBody}
+        ${connectForm}
+      </section>
+
       <section class="card">
         <h2>Cadastrar regra</h2>
         <form method="post" action="/dashboard/billing" data-testid="billing-form">
@@ -89,7 +123,7 @@ export const renderBillingPage = (viewModel: DashboardCompanyViewModel) => {
 
       <section class="card">
         <h2>Regras cadastradas</h2>
-        ${body}
+        ${pricingBody}
       </section>
     </main>
   </body>

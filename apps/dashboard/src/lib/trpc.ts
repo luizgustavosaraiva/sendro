@@ -16,9 +16,15 @@ import {
   operationsSummarySchema,
   companyDriversOperationalListSchema,
   connectResultSchema,
+  billingConnectOnboardingCreateSchema,
+  billingConnectOnboardingCreateResultSchema,
+  billingConnectStatusSchema,
   pricingRuleCreateSchema,
   pricingRuleListResultSchema,
   whatsappSessionStatusSchema,
+  type BillingConnectOnboardingCreateInput,
+  type BillingConnectOnboardingCreateResult,
+  type BillingConnectStatus,
   type CompanyDriverOperationalState,
   type ConnectResult,
   type CreateDeliveryInput,
@@ -167,6 +173,11 @@ export type DashboardCompanyBillingViewModel = {
     ruleId: string;
     message: string;
   };
+  connect: {
+    state: "loaded" | "error" | "not-company";
+    status?: BillingConnectStatus;
+    error?: string;
+  };
 };
 
 export type DashboardCompanyViewModel = {
@@ -228,7 +239,11 @@ const defaultDriverDeliveriesViewModel = (): DashboardDriverDeliveriesViewModel 
 
 const defaultBillingViewModel = (): DashboardCompanyBillingViewModel => ({
   rules: [],
-  state: "empty"
+  state: "empty",
+  connect: {
+    state: "error",
+    error: "billing_connect_unavailable"
+  }
 });
 
 const parseTrpcPayload = async (response: Response) => {
@@ -441,6 +456,20 @@ export const createCompanyPricingRule = async (input: PricingRuleCreateInput, co
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const getBillingConnectStatus = async (cookieHeader?: string | null) => {
+  const result = await fetchTrpc("billing.connectStatus", billingConnectStatusSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const createBillingConnectOnboarding = async (
+  input: BillingConnectOnboardingCreateInput,
+  cookieHeader?: string | null
+): Promise<BillingConnectOnboardingCreateResult | null> => {
+  const parsedInput = billingConnectOnboardingCreateSchema.parse(input);
+  const result = await postTrpc("billing.connectStripe", parsedInput, billingConnectOnboardingCreateResultSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 const buildDriverStrikeSummary = (deliveries: DeliveryListItem[]) => {
   const strikes = deliveries.flatMap((delivery) => delivery.dispatch?.strikes ?? []);
   if (strikes.length === 0) {
@@ -489,6 +518,7 @@ export const getDashboardCompanyViewModel = async (
     reprocessDispatch?: { nowIso?: string; companyId?: string } | null;
     resolveDriverOffer?: ResolveDriverOfferInput | null;
     createPricingRule?: PricingRuleCreateInput | null;
+    billingConnectError?: string | null;
   }
 ): Promise<DashboardCompanyViewModel | null> => {
   const currentUser = await getCurrentUser(cookieHeader);
@@ -619,7 +649,11 @@ export const getDashboardCompanyViewModel = async (
       billing: {
         rules: [],
         state: "not-company",
-        error: "Somente contas empresa podem gerenciar regras de cobrança."
+        error: "Somente contas empresa podem gerenciar regras de cobrança.",
+        connect: {
+          state: "not-company",
+          error: "Somente contas empresa podem conectar Stripe Connect."
+        }
       }
     };
   }
@@ -666,7 +700,11 @@ export const getDashboardCompanyViewModel = async (
         billing: {
           rules: [],
           state: "not-company",
-          error: "Somente contas empresa podem gerenciar regras de cobrança."
+          error: "Somente contas empresa podem gerenciar regras de cobrança.",
+          connect: {
+            state: "not-company",
+            error: "Somente contas empresa podem conectar Stripe Connect."
+          }
         }
       };
     }
@@ -754,7 +792,11 @@ export const getDashboardCompanyViewModel = async (
       billing: {
         rules: [],
         state: "not-company",
-        error: "Somente contas empresa podem gerenciar regras de cobrança."
+        error: "Somente contas empresa podem gerenciar regras de cobrança.",
+        connect: {
+          state: "not-company",
+          error: "Somente contas empresa podem conectar Stripe Connect."
+        }
       }
     };
   }
@@ -799,6 +841,7 @@ export const getDashboardCompanyViewModel = async (
         const created = await createCompanyPricingRule(options.createPricingRule, cookieHeader);
         if (!created) {
           billing = {
+            ...billing,
             rules: [],
             state: "error",
             error: "A sessão foi resolvida, mas a regra de cobrança não pôde ser criada porque a autenticação SSR não foi aceita pela API."
@@ -812,6 +855,7 @@ export const getDashboardCompanyViewModel = async (
       } catch (error) {
         const detail = error instanceof Error ? error.message : "pricing_rule_create_failed";
         billing = {
+          ...billing,
           rules: [],
           state: "error",
           error: `Falha ao criar regra de cobrança. Diagnóstico: ${detail}`
@@ -824,12 +868,14 @@ export const getDashboardCompanyViewModel = async (
         const rows = await listCompanyPricingRules(cookieHeader);
         if (!rows) {
           billing = {
+            ...billing,
             rules: [],
             state: "error",
             error: "A sessão foi resolvida, mas a lista de regras de cobrança não pôde ser carregada."
           };
         } else {
           billing = {
+            ...billing,
             rules: rows,
             state: rows.length > 0 ? "loaded" : "empty",
             createFeedback
@@ -838,6 +884,7 @@ export const getDashboardCompanyViewModel = async (
       } catch (error) {
         const detail = error instanceof Error ? error.message : "pricing_rule_list_failed";
         billing = {
+          ...billing,
           rules: [],
           state: "error",
           error: `Falha ao carregar regras de cobrança. Diagnóstico: ${detail}`
@@ -847,10 +894,39 @@ export const getDashboardCompanyViewModel = async (
   } catch (error) {
     const detail = error instanceof Error ? error.message : "billing_unknown_failure";
     billing = {
+      ...billing,
       rules: [],
       state: "error",
       error: `Falha ao resolver o bloco de cobrança no SSR. Diagnóstico: ${detail}`
     };
+  }
+
+  if (options?.billingConnectError) {
+    billing.connect = {
+      state: "error",
+      error: options.billingConnectError
+    };
+  } else {
+    try {
+      const connectStatus = await getBillingConnectStatus(cookieHeader);
+      if (!connectStatus) {
+        billing.connect = {
+          state: "error",
+          error: "A sessão foi resolvida, mas o status do Stripe Connect não pôde ser carregado."
+        };
+      } else {
+        billing.connect = {
+          state: "loaded",
+          status: connectStatus
+        };
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : "billing_connect_status_failed";
+      billing.connect = {
+        state: "error",
+        error: `Falha ao carregar status do Stripe Connect. Diagnóstico: ${detail}`
+      };
+    }
   }
 
   try {
