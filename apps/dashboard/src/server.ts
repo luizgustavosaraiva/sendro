@@ -7,7 +7,14 @@ import { renderBillingPage } from "./app/(app)/dashboard/billing/page";
 import { renderWhatsAppPage } from "./app/(app)/dashboard/whatsapp/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
-import { type CreateDeliveryInput, type DeliveryCompletionInput, type PricingRuleCreateInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
+import {
+  type BillingReportListInput,
+  type CreateDeliveryInput,
+  type DeliveryCompletionInput,
+  type PricingRuleCreateInput,
+  type ResolveDriverOfferInput,
+  type TransitionDeliveryInput
+} from "@repo/shared";
 import {
   getCurrentUser,
   getDashboardCompanyViewModel,
@@ -147,6 +154,60 @@ const rerenderBilling = async (
 const normalizeMaybeNull = (value: string | undefined) => {
   const trimmed = String(value ?? "").trim();
   return trimmed.length > 0 ? trimmed : null;
+};
+
+const DEFAULT_BILLING_REPORT_PAGE = 1;
+const DEFAULT_BILLING_REPORT_LIMIT = 50;
+const MAX_BILLING_REPORT_LIMIT = 200;
+const BILLING_REPORT_LOOKBACK_DAYS = 30;
+
+const isIsoDateLike = (value: string | null) => {
+  if (!value) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime());
+};
+
+const parsePositiveInt = (value: string | null) => {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+export const parseBillingReportFiltersFromSearchParams = (
+  searchParams: URLSearchParams,
+  now = new Date()
+): BillingReportListInput => {
+  const defaultPeriodEnd = now.toISOString();
+  const defaultStartDate = new Date(now);
+  defaultStartDate.setDate(defaultStartDate.getDate() - BILLING_REPORT_LOOKBACK_DAYS);
+  const defaultPeriodStart = defaultStartDate.toISOString();
+
+  const periodStartCandidate = searchParams.get("periodStart");
+  const periodEndCandidate = searchParams.get("periodEnd");
+
+  let periodStart = isIsoDateLike(periodStartCandidate) ? new Date(periodStartCandidate as string).toISOString() : defaultPeriodStart;
+  let periodEnd = isIsoDateLike(periodEndCandidate) ? new Date(periodEndCandidate as string).toISOString() : defaultPeriodEnd;
+
+  if (new Date(periodStart).getTime() > new Date(periodEnd).getTime()) {
+    periodStart = defaultPeriodStart;
+    periodEnd = defaultPeriodEnd;
+  }
+
+  const pageCandidate = parsePositiveInt(searchParams.get("page"));
+  const limitCandidate = parsePositiveInt(searchParams.get("limit"));
+
+  const page = pageCandidate && pageCandidate >= 1 ? pageCandidate : DEFAULT_BILLING_REPORT_PAGE;
+  const limit =
+    limitCandidate && limitCandidate >= 1 && limitCandidate <= MAX_BILLING_REPORT_LIMIT
+      ? limitCandidate
+      : DEFAULT_BILLING_REPORT_LIMIT;
+
+  return {
+    periodStart,
+    periodEnd,
+    page,
+    limit
+  };
 };
 
 export const server = createServer(async (request, response) => {
@@ -458,7 +519,8 @@ export const server = createServer(async (request, response) => {
         return;
       }
 
-      await rerenderBilling(response, request.headers.cookie ?? null);
+      const billingReport = parseBillingReportFiltersFromSearchParams(url.searchParams);
+      await rerenderBilling(response, request.headers.cookie ?? null, { billingReport });
       return;
     }
 

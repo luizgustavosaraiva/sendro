@@ -36,7 +36,9 @@ import {
   pricingRuleUpdateSchema,
   billingConnectOnboardingCreateResultSchema,
   billingConnectOnboardingCreateSchema,
-  billingConnectStatusSchema
+  billingConnectStatusSchema,
+  billingReportListSchema,
+  billingReportSummarySchema
 } from "@repo/shared";
 import { ensureProfileForUser } from "../routes/auth/register";
 import {
@@ -48,6 +50,7 @@ import {
 import {
   completeDelivery,
   createDelivery,
+  getBillingReport,
   getDeliveryDetail,
   getOperationsSummary,
   listCompanyDriversOperational,
@@ -195,7 +198,11 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => createBillingConnectOnboardingForUser({ user: ctx.session.user as never, data: input })),
     connectStatus: protectedProcedure
       .output(billingConnectStatusSchema)
-      .query(async ({ ctx }) => getBillingConnectStatusForUser(ctx.session.user as never))
+      .query(async ({ ctx }) => getBillingConnectStatusForUser(ctx.session.user as never)),
+    report: protectedProcedure
+      .input(billingReportListSchema)
+      .output(billingReportSummarySchema)
+      .query(async ({ ctx, input }) => getBillingReport({ user: ctx.session.user as never, data: input }))
   }),
   whatsapp: whatsappRouter
 });

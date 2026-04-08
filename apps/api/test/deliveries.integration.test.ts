@@ -9,6 +9,7 @@ import {
   deliveries,
   dispatchAttempts,
   dispatchQueueEntries,
+  pricingRules,
   users
 } from "@repo/db";
 import {
@@ -487,17 +488,43 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       }
     ]);
 
+    await db.insert(pricingRules).values({
+      companyId: companyProfile.id,
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightMinGrams: 0,
+      weightMaxGrams: 2000,
+      amountCents: 2100,
+      currency: "BRL"
+    });
+
     const createOne = await retailerAgent
       .post("/trpc/deliveries.create")
       .set("origin", "http://localhost:3000")
-      .send({ companyId: companyProfile.id, externalReference: `OPS-ONE-${suffix}` });
+      .send({
+        companyId: companyProfile.id,
+        externalReference: `OPS-ONE-${suffix}`,
+        metadata: {
+          region: "SP-CAPITAL",
+          deliveryType: "same_day",
+          weightGrams: 1000
+        }
+      });
     expect(createOne.status, createOne.text).toBe(200);
     const createdOne = trpcJson(createOne);
 
     const createTwo = await retailerAgent
       .post("/trpc/deliveries.create")
       .set("origin", "http://localhost:3000")
-      .send({ companyId: companyProfile.id, externalReference: `OPS-TWO-${suffix}` });
+      .send({
+        companyId: companyProfile.id,
+        externalReference: `OPS-TWO-${suffix}`,
+        metadata: {
+          region: "SP-CAPITAL",
+          deliveryType: "same_day",
+          weightGrams: 8000
+        }
+      });
     expect(createTwo.status, createTwo.text).toBe(200);
     const createdTwo = trpcJson(createTwo);
 
@@ -522,6 +549,17 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
       .send({ deliveryId: createdTwo.deliveryId, decision: "accept" });
     expect(acceptTwo.status, acceptTwo.text).toBe(200);
 
+    const completeTwo = await acceptTwoAgent!
+      .post("/trpc/deliveries.complete")
+      .set("origin", "http://localhost:3000")
+      .send({
+        deliveryId: createdTwo.deliveryId,
+        proof: {
+          note: "Delivered for operations summary revenue check"
+        }
+      });
+    expect(completeTwo.status, completeTwo.text).toBe(200);
+
     const malformedWindow = await companyAgent
       .get(operationsSummaryUrl({ window: "invalid_window" }))
       .set("origin", "http://localhost:3000");
@@ -545,7 +583,7 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(summary.kpis).toMatchObject({
       awaitingAcceptance: 1,
       failedAttempts: 1,
-      delivered: 0,
+      delivered: 1,
       activeDrivers: 2,
       grossRevenueCents: 0,
       netRevenueCents: 0
@@ -585,8 +623,7 @@ describe.skipIf(!process.env.DATABASE_URL)("deliveries integration", () => {
     expect(driverBState?.bondStatus).toBe("active");
     expect(drivers.filter((row: { strikeCount: number }) => row.strikeCount > 0)).toHaveLength(1);
     expect(drivers.some((row: { strikeConsequence: string | null }) => row.strikeConsequence === "warning")).toBe(true);
-    expect(drivers.some((row: { operationalState: string }) => row.operationalState === "busy")).toBe(true);
-    expect(drivers.some((row: { operationalState: string }) => row.operationalState === "offered")).toBe(true);
+    expect(drivers.some((row: { operationalState: string }) => row.operationalState === "available")).toBe(true);
 
     const emptyCompanyAgent = await registerAndLogin(app, {
       role: "company",

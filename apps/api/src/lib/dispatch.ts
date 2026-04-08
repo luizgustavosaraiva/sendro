@@ -37,7 +37,9 @@ import type {
   ReprocessDispatchTimeoutsInput,
   ReprocessDispatchTimeoutsResult,
   ResolveDriverOfferInput,
-  ResolveDriverOfferResult
+  ResolveDriverOfferResult,
+  BillingReportListInput,
+  BillingReportSummary
 } from "@repo/shared";
 import {
   assertRetailerHasActiveBond,
@@ -1438,6 +1440,160 @@ const toCount = (value: unknown): number => {
   return 0;
 };
 
+type RevenueComputation = {
+  grossRevenueCents: number;
+  netRevenueCents: number;
+  priceDiagnostic: string;
+  matchedRuleId: string | null;
+  region: string | null;
+  deliveryType: string | null;
+  weightGrams: number | null;
+};
+
+const computeDeliveryRevenue = async (input: {
+  tx: DbHandle | DbTransaction;
+  companyId: string;
+  delivery: DeliveryRecord;
+}): Promise<RevenueComputation> => {
+  const attributes = resolveDeliveryPricingAttributes(input.delivery.metadata);
+  if (!attributes) {
+    return {
+      grossRevenueCents: 0,
+      netRevenueCents: 0,
+      matchedRuleId: null,
+      priceDiagnostic: "fallback:delivery_metadata_unmatchable",
+      region: null,
+      deliveryType: null,
+      weightGrams: null
+    };
+  }
+
+  const candidateRules = await input.tx
+    .select()
+    .from(pricingRules)
+    .where(
+      and(
+        eq(pricingRules.companyId, input.companyId),
+        eq(pricingRules.region, attributes.region),
+        eq(pricingRules.deliveryType, attributes.deliveryType),
+        lte(pricingRules.weightMinGrams, attributes.weightGrams),
+        or(isNull(pricingRules.weightMaxGrams), gte(pricingRules.weightMaxGrams, attributes.weightGrams))
+      )
+    )
+    .orderBy(asc(pricingRules.weightMinGrams), asc(pricingRules.weightMaxGrams), asc(pricingRules.createdAt));
+
+  const match = resolvePricingMatch({
+    deliveryMetadata: input.delivery.metadata,
+    candidateRules
+  });
+
+  return {
+    grossRevenueCents: match.amountCents,
+    netRevenueCents: match.amountCents,
+    matchedRuleId: match.matchedRuleId,
+    priceDiagnostic: match.diagnostic,
+    region: attributes.region,
+    deliveryType: attributes.deliveryType,
+    weightGrams: attributes.weightGrams
+  };
+};
+
+export const getBillingReport = async (input: {
+  user: SessionUser;
+  data: BillingReportListInput;
+}): Promise<BillingReportSummary> => {
+  const { db } = assertDb();
+  requireRole(input.user, "company");
+  const company = await resolveAuthenticatedCompanyProfile(input.user);
+
+  const periodStart = new Date(input.data.periodStart);
+  const periodEnd = new Date(input.data.periodEnd);
+  const page = input.data.page ?? 1;
+  const limit = input.data.limit ?? 50;
+  const offset = (page - 1) * limit;
+
+  try {
+    const periodPredicates = [
+      eq(deliveries.companyId, company.id),
+      eq(deliveries.status, "delivered"),
+      gte(deliveries.deliveredAt, periodStart),
+      lte(deliveries.deliveredAt, periodEnd)
+    ];
+
+    const [totalsRow] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(deliveries)
+      .where(and(...periodPredicates));
+
+    const totalRows = toCount(totalsRow?.count);
+    const totalPages = totalRows === 0 ? 0 : Math.ceil(totalRows / limit);
+
+    const [deliveredRows, deliveredRowsForTotals] = await Promise.all([
+      db
+        .select()
+        .from(deliveries)
+        .where(and(...periodPredicates))
+        .orderBy(desc(deliveries.deliveredAt), desc(deliveries.id))
+        .limit(limit)
+        .offset(offset),
+      db.select().from(deliveries).where(and(...periodPredicates))
+    ]);
+
+    const rows: BillingReportSummary["rows"] = [];
+    let grossRevenueCents = 0;
+    let netRevenueCents = 0;
+
+    for (const delivery of deliveredRowsForTotals) {
+      const revenue = await computeDeliveryRevenue({
+        tx: db,
+        companyId: company.id,
+        delivery
+      });
+
+      grossRevenueCents += revenue.grossRevenueCents;
+      netRevenueCents += revenue.netRevenueCents;
+    }
+
+    for (const delivery of deliveredRows) {
+      const revenue = await computeDeliveryRevenue({
+        tx: db,
+        companyId: company.id,
+        delivery
+      });
+
+      rows.push({
+        deliveryId: delivery.id,
+        companyId: delivery.companyId,
+        deliveredAt: delivery.deliveredAt ? toIso(delivery.deliveredAt) : toIso(delivery.updatedAt),
+        region: revenue.region,
+        deliveryType: revenue.deliveryType,
+        weightGrams: revenue.weightGrams,
+        matchedRuleId: revenue.matchedRuleId,
+        priceDiagnostic: revenue.priceDiagnostic,
+        grossRevenueCents: revenue.grossRevenueCents,
+        netRevenueCents: revenue.netRevenueCents
+      });
+    }
+
+    return {
+      generatedAt: toIso(new Date()),
+      periodStart: toIso(periodStart),
+      periodEnd: toIso(periodEnd),
+      page,
+      limit,
+      totalRows,
+      totalPages,
+      totals: {
+        grossRevenueCents,
+        netRevenueCents
+      },
+      rows
+    };
+  } catch {
+    throw deliveryError("INTERNAL_SERVER_ERROR", "billing_report_query_failed");
+  }
+};
+
 export const getOperationsSummary = async (input: {
   user: SessionUser;
   data?: OperationsSummaryFiltersInput;
@@ -1458,7 +1614,7 @@ export const getOperationsSummary = async (input: {
       deliveredPredicates.push(gte(deliveries.deliveredAt, windowStart));
     }
 
-    const [queueKpis, failedAttemptsRow, deliveredRow, activeDriversRow] = await Promise.all([
+    const [queueKpis, failedAttemptsRow, deliveredRow, activeDriversRow, deliveredRows] = await Promise.all([
       db
         .select({
           awaitingAcceptance: sql<number>`count(*) filter (where ${dispatchQueueEntries.phase} = 'offered')::int`,
@@ -1477,8 +1633,22 @@ export const getOperationsSummary = async (input: {
       db
         .select({ count: sql<number>`count(*)::int` })
         .from(bonds)
-        .where(and(eq(bonds.companyId, company.id), eq(bonds.entityType, "driver"), eq(bonds.status, "active")))
+        .where(and(eq(bonds.companyId, company.id), eq(bonds.entityType, "driver"), eq(bonds.status, "active"))),
+      db.select().from(deliveries).where(and(...deliveredPredicates))
     ]);
+
+    let grossRevenueCents = 0;
+    let netRevenueCents = 0;
+
+    for (const delivery of deliveredRows) {
+      const revenue = await computeDeliveryRevenue({
+        tx: db,
+        companyId: company.id,
+        delivery
+      });
+      grossRevenueCents += revenue.grossRevenueCents;
+      netRevenueCents += revenue.netRevenueCents;
+    }
 
     return {
       generatedAt: toIso(new Date()),
@@ -1494,8 +1664,8 @@ export const getOperationsSummary = async (input: {
         failedAttempts: toCount(failedAttemptsRow[0]?.count),
         delivered: toCount(deliveredRow[0]?.count),
         activeDrivers: toCount(activeDriversRow[0]?.count),
-        grossRevenueCents: 0,
-        netRevenueCents: 0
+        grossRevenueCents,
+        netRevenueCents
       }
     };
   } catch {

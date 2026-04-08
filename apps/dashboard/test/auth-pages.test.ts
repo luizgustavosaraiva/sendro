@@ -3,6 +3,7 @@ import LoginPage from "../src/app/(auth)/login/page";
 import RegisterPage from "../src/app/(auth)/register/page";
 import { renderDashboardPage } from "../src/app/(app)/dashboard/page";
 import { isProtectedPath } from "../src/middleware";
+import { parseBillingReportFiltersFromSearchParams } from "../src/server";
 
 describe("dashboard auth pages", () => {
   it("renders login with actionable fields", () => {
@@ -1071,6 +1072,59 @@ describe("dashboard auth pages", () => {
     expect(html).toContain('data-testid="drivers-operational-not-company"');
     expect(html).toContain('data-testid="summary-state">not-company');
     expect(html).toContain('data-testid="drivers-state">not-company');
+  });
+
+  it("parses billing report filters from query with bounded deterministic fallbacks", () => {
+    const now = new Date("2026-04-08T12:00:00.000Z");
+    const malformed = parseBillingReportFiltersFromSearchParams(
+      new URLSearchParams({
+        periodStart: "not-a-date",
+        periodEnd: "also-bad",
+        page: "0",
+        limit: "5000"
+      }),
+      now
+    );
+
+    expect(malformed.page).toBe(1);
+    expect(malformed.limit).toBe(50);
+    expect(malformed.periodEnd).toBe("2026-04-08T12:00:00.000Z");
+    expect(malformed.periodStart).toBe("2026-03-09T12:00:00.000Z");
+
+    const valid = parseBillingReportFiltersFromSearchParams(
+      new URLSearchParams({
+        periodStart: "2026-04-01T00:00:00.000Z",
+        periodEnd: "2026-04-07T23:59:59.999Z",
+        page: "3",
+        limit: "25"
+      }),
+      now
+    );
+
+    expect(valid).toEqual({
+      periodStart: "2026-04-01T00:00:00.000Z",
+      periodEnd: "2026-04-07T23:59:59.999Z",
+      page: 3,
+      limit: 25
+    });
+  });
+
+  it("falls back when billing report period is inverted", () => {
+    const now = new Date("2026-04-08T12:00:00.000Z");
+    const parsed = parseBillingReportFiltersFromSearchParams(
+      new URLSearchParams({
+        periodStart: "2026-04-10T00:00:00.000Z",
+        periodEnd: "2026-04-01T00:00:00.000Z",
+        page: "2",
+        limit: "100"
+      }),
+      now
+    );
+
+    expect(parsed.periodEnd).toBe("2026-04-08T12:00:00.000Z");
+    expect(parsed.periodStart).toBe("2026-03-09T12:00:00.000Z");
+    expect(parsed.page).toBe(2);
+    expect(parsed.limit).toBe(100);
   });
 
   it("marks dashboard as a protected path", () => {

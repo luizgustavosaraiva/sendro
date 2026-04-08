@@ -21,10 +21,14 @@ import {
   billingConnectStatusSchema,
   pricingRuleCreateSchema,
   pricingRuleListResultSchema,
+  billingReportListSchema,
+  billingReportSummarySchema,
   whatsappSessionStatusSchema,
   type BillingConnectOnboardingCreateInput,
   type BillingConnectOnboardingCreateResult,
   type BillingConnectStatus,
+  type BillingReportListInput,
+  type BillingReportSummary,
   type CompanyDriverOperationalState,
   type ConnectResult,
   type CreateDeliveryInput,
@@ -165,6 +169,13 @@ export type DashboardCompanyDeliveriesViewModel = {
   };
 };
 
+export type DashboardBillingReportFilters = {
+  periodStart: string;
+  periodEnd: string;
+  page: number;
+  limit: number;
+};
+
 export type DashboardCompanyBillingViewModel = {
   state: "loaded" | "empty" | "error" | "not-company";
   rules: PricingRule[];
@@ -176,6 +187,18 @@ export type DashboardCompanyBillingViewModel = {
   connect: {
     state: "loaded" | "error" | "not-company";
     status?: BillingConnectStatus;
+    error?: string;
+  };
+  financialKpis: {
+    state: "loaded" | "empty" | "error" | "not-company";
+    grossRevenueCents?: number;
+    netRevenueCents?: number;
+    error?: string;
+  };
+  report: {
+    state: "loaded" | "empty" | "error" | "not-company";
+    filters: DashboardBillingReportFilters;
+    data?: BillingReportSummary;
     error?: string;
   };
 };
@@ -237,12 +260,33 @@ const defaultDriverDeliveriesViewModel = (): DashboardDriverDeliveriesViewModel 
   state: "empty"
 });
 
+const defaultBillingReportFilters = (): DashboardBillingReportFilters => {
+  const now = new Date();
+  const periodEnd = now.toISOString();
+  const periodStartDate = new Date(now);
+  periodStartDate.setDate(periodStartDate.getDate() - 30);
+
+  return {
+    periodStart: periodStartDate.toISOString(),
+    periodEnd,
+    page: 1,
+    limit: 50
+  };
+};
+
 const defaultBillingViewModel = (): DashboardCompanyBillingViewModel => ({
   rules: [],
   state: "empty",
   connect: {
     state: "error",
     error: "billing_connect_unavailable"
+  },
+  financialKpis: {
+    state: "empty"
+  },
+  report: {
+    state: "empty",
+    filters: defaultBillingReportFilters()
   }
 });
 
@@ -461,6 +505,12 @@ export const getBillingConnectStatus = async (cookieHeader?: string | null) => {
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const getBillingReport = async (input: BillingReportListInput, cookieHeader?: string | null) => {
+  const parsedInput = billingReportListSchema.parse(input);
+  const result = await fetchTrpc("billing.report", billingReportSummarySchema, cookieHeader, parsedInput);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 export const createBillingConnectOnboarding = async (
   input: BillingConnectOnboardingCreateInput,
   cookieHeader?: string | null
@@ -519,6 +569,7 @@ export const getDashboardCompanyViewModel = async (
     resolveDriverOffer?: ResolveDriverOfferInput | null;
     createPricingRule?: PricingRuleCreateInput | null;
     billingConnectError?: string | null;
+    billingReport?: BillingReportListInput | null;
   }
 ): Promise<DashboardCompanyViewModel | null> => {
   const currentUser = await getCurrentUser(cookieHeader);
@@ -653,6 +704,15 @@ export const getDashboardCompanyViewModel = async (
         connect: {
           state: "not-company",
           error: "Somente contas empresa podem conectar Stripe Connect."
+        },
+        financialKpis: {
+          state: "not-company",
+          error: "Somente contas empresa visualizam KPIs financeiros."
+        },
+        report: {
+          state: "not-company",
+          filters: defaultBillingReportFilters(),
+          error: "Somente contas empresa visualizam relatórios financeiros."
         }
       }
     };
@@ -704,6 +764,15 @@ export const getDashboardCompanyViewModel = async (
           connect: {
             state: "not-company",
             error: "Somente contas empresa podem conectar Stripe Connect."
+          },
+          financialKpis: {
+            state: "not-company",
+            error: "Somente contas empresa visualizam KPIs financeiros."
+          },
+          report: {
+            state: "not-company",
+            filters: defaultBillingReportFilters(),
+            error: "Somente contas empresa visualizam relatórios financeiros."
           }
         }
       };
@@ -796,6 +865,15 @@ export const getDashboardCompanyViewModel = async (
         connect: {
           state: "not-company",
           error: "Somente contas empresa podem conectar Stripe Connect."
+        },
+        financialKpis: {
+          state: "not-company",
+          error: "Somente contas empresa visualizam KPIs financeiros."
+        },
+        report: {
+          state: "not-company",
+          filters: defaultBillingReportFilters(),
+          error: "Somente contas empresa visualizam relatórios financeiros."
         }
       }
     };
@@ -927,6 +1005,36 @@ export const getDashboardCompanyViewModel = async (
         error: `Falha ao carregar status do Stripe Connect. Diagnóstico: ${detail}`
       };
     }
+  }
+
+  const reportFilters = options?.billingReport ?? defaultBillingReportFilters();
+  billing.report = {
+    ...billing.report,
+    filters: reportFilters
+  };
+
+  try {
+    const report = await getBillingReport(reportFilters, cookieHeader);
+    if (!report) {
+      billing.report = {
+        state: "error",
+        filters: reportFilters,
+        error: "A sessão foi resolvida, mas o relatório financeiro não pôde ser carregado."
+      };
+    } else {
+      billing.report = {
+        state: report.rows.length > 0 ? "loaded" : "empty",
+        filters: reportFilters,
+        data: report
+      };
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "billing_report_unavailable";
+    billing.report = {
+      state: "error",
+      filters: reportFilters,
+      error: `Falha ao carregar relatório financeiro. Diagnóstico: ${detail}`
+    };
   }
 
   try {
@@ -1104,10 +1212,18 @@ export const getDashboardCompanyViewModel = async (
         summary = null;
         summaryState = "error";
         summaryError = `A sessão foi resolvida, mas o summary operacional não pôde ser carregado. Diagnóstico: ${detail}`;
+        billing.financialKpis = {
+          state: "error",
+          error: `Falha ao carregar KPIs financeiros. Diagnóstico: ${detail}`
+        };
       } else if (!summaryResult.value) {
         summary = null;
         summaryState = "error";
         summaryError = "A sessão foi resolvida, mas o summary operacional não pôde ser carregado.";
+        billing.financialKpis = {
+          state: "error",
+          error: "A sessão foi resolvida, mas os KPIs financeiros não puderam ser carregados."
+        };
       } else {
         summary = summaryResult.value;
         const hasSummaryData =
@@ -1115,8 +1231,15 @@ export const getDashboardCompanyViewModel = async (
           summary.kpis.waitingQueue > 0 ||
           summary.kpis.failedAttempts > 0 ||
           summary.kpis.delivered > 0 ||
-          summary.kpis.activeDrivers > 0;
+          summary.kpis.activeDrivers > 0 ||
+          summary.kpis.grossRevenueCents > 0 ||
+          summary.kpis.netRevenueCents > 0;
         summaryState = hasSummaryData ? "loaded" : "empty";
+        billing.financialKpis = {
+          state: summary.kpis.grossRevenueCents > 0 || summary.kpis.netRevenueCents > 0 ? "loaded" : "empty",
+          grossRevenueCents: summary.kpis.grossRevenueCents,
+          netRevenueCents: summary.kpis.netRevenueCents
+        };
       }
 
       if (driversResult.status === "rejected") {
@@ -1145,6 +1268,10 @@ export const getDashboardCompanyViewModel = async (
     summary = null;
     summaryState = "error";
     summaryError = `A sessão foi resolvida, mas o summary operacional não pôde ser carregado. Diagnóstico: ${detail}`;
+    billing.financialKpis = {
+      state: "error",
+      error: `Falha ao carregar KPIs financeiros. Diagnóstico: ${detail}`
+    };
     driversOperational = [];
     driversState = "error";
     driversError = `A sessão foi resolvida, mas a disponibilidade operacional dos entregadores não pôde ser carregada. Diagnóstico: ${detail}`;
