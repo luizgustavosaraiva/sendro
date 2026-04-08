@@ -63,6 +63,7 @@ export class PricingRuleCatalogSyncError extends Error {
 
 const stripe = env.STRIPE_API_KEY ? new Stripe(env.STRIPE_API_KEY) : null;
 const isLocalStubKey = env.STRIPE_API_KEY?.startsWith("sk_test_sendro_") ?? false;
+const isPricingCatalogStubMode = isLocalStubKey || !env.STRIPE_API_KEY;
 
 const ensureStripeReady = (scope: string) => {
   if (!stripe && !isLocalStubKey) {

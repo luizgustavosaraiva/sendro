@@ -3,6 +3,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { assertDb, pricingRules } from "@repo/db";
 import type { EntityRole, PricingRule, PricingRuleCreateInput, PricingRuleListInput, PricingRuleUpdateInput } from "@repo/shared";
 import { resolveAuthenticatedCompanyProfile } from "./bonds";
+import * as stripeLib from "./stripe";
 
 type SessionUser = {
   id: string;
@@ -55,6 +56,10 @@ const mapMutationError = (error: unknown): never => {
     throw error;
   }
 
+  if (error instanceof stripeLib.PricingRuleCatalogSyncError) {
+    throw pricingError("INTERNAL_SERVER_ERROR", error.message);
+  }
+
   const dbError = asDbError(error);
   const isConflict =
     dbError.code === "23505" ||
@@ -66,7 +71,11 @@ const mapMutationError = (error: unknown): never => {
     throw pricingError("CONFLICT", "pricing_rules_conflict:duplicate_company_key");
   }
 
-  throw pricingError("INTERNAL_SERVER_ERROR", "pricing_rules_write_failed");
+  const failureDetail = [dbError.code, dbError.constraint].filter(Boolean).join(":");
+  throw pricingError(
+    "INTERNAL_SERVER_ERROR",
+    failureDetail ? `pricing_rules_write_failed:${failureDetail}` : "pricing_rules_write_failed"
+  );
 };
 
 export const listPricingRules = async (input: { user: SessionUser; filters?: PricingRuleListInput }) => {
@@ -118,7 +127,34 @@ export const createPricingRule = async (input: { user: SessionUser; data: Pricin
       throw pricingError("INTERNAL_SERVER_ERROR", "pricing_rules_create_failed");
     }
 
-    return mapPricingRule(created);
+    const sync = await stripeLib.syncPricingRuleCatalog({
+      companyId: created.companyId,
+      ruleId: created.id,
+      region: created.region,
+      deliveryType: created.deliveryType,
+      weightMinGrams: created.weightMinGrams,
+      weightMaxGrams: created.weightMaxGrams,
+      amountCents: created.amountCents,
+      currency: created.currency as PricingRule["currency"],
+      existingStripeProductId: created.stripeProductId,
+      existingStripePriceId: created.stripePriceId
+    });
+
+    const [hydrated] = await db
+      .update(pricingRules)
+      .set({
+        stripeProductId: sync.stripeProductId,
+        stripePriceId: sync.stripePriceId,
+        updatedAt: new Date()
+      })
+      .where(and(eq(pricingRules.id, created.id), eq(pricingRules.companyId, company.id)))
+      .returning();
+
+    if (!hydrated) {
+      throw pricingError("INTERNAL_SERVER_ERROR", "pricing_rules_create_failed");
+    }
+
+    return mapPricingRule(hydrated);
   } catch (error) {
     return mapMutationError(error);
   }
@@ -150,7 +186,34 @@ export const updatePricingRule = async (input: { user: SessionUser; data: Pricin
       throw pricingError("NOT_FOUND", "pricing_rules_not_found");
     }
 
-    return mapPricingRule(updated);
+    const sync = await stripeLib.syncPricingRuleCatalog({
+      companyId: updated.companyId,
+      ruleId: updated.id,
+      region: updated.region,
+      deliveryType: updated.deliveryType,
+      weightMinGrams: updated.weightMinGrams,
+      weightMaxGrams: updated.weightMaxGrams,
+      amountCents: updated.amountCents,
+      currency: updated.currency as PricingRule["currency"],
+      existingStripeProductId: updated.stripeProductId,
+      existingStripePriceId: updated.stripePriceId
+    });
+
+    const [hydrated] = await db
+      .update(pricingRules)
+      .set({
+        stripeProductId: sync.stripeProductId,
+        stripePriceId: sync.stripePriceId,
+        updatedAt: new Date()
+      })
+      .where(and(eq(pricingRules.id, updated.id), eq(pricingRules.companyId, company.id)))
+      .returning();
+
+    if (!hydrated) {
+      throw pricingError("NOT_FOUND", "pricing_rules_not_found");
+    }
+
+    return mapPricingRule(hydrated);
   } catch (error) {
     return mapMutationError(error);
   }

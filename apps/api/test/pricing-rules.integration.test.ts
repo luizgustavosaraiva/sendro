@@ -1,10 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import request from "supertest";
 import { assertDb, pricingRules } from "@repo/db";
 import { and, eq } from "drizzle-orm";
 import { pricingRuleCreateSchema, pricingRuleListResultSchema, pricingRuleSchema, pricingRuleUpdateSchema } from "@repo/shared";
-import { PricingRuleCatalogSyncError, syncPricingRuleCatalog } from "../src/lib/stripe";
+import * as stripeLib from "../src/lib/stripe";
 import { buildApp } from "../src/index";
 
 const registerAndLogin = async (
@@ -53,9 +53,20 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
     }
   }, 30000);
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("creates, lists, updates company-scoped pricing rules with stable ordering", async () => {
     const { db } = assertDb();
     const suffix = Date.now();
+    const syncSpy = vi
+      .spyOn(stripeLib, "syncPricingRuleCatalog")
+      .mockImplementation(async (input: stripeLib.SyncPricingRuleCatalogInput) => ({
+      stripeProductId: `prod_sendro_${input.ruleId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`,
+      stripePriceId: `price_sendro_${input.amountCents}`,
+      mode: "stub"
+    }));
 
     const companyAgent = await registerAndLogin(app, {
       role: "company",
@@ -87,6 +98,8 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
       });
     expect(createA.status, createA.text).toBe(200);
     const createdA = pricingRuleSchema.parse(trpcJson(createA));
+    expect(createdA.stripeProductId).toMatch(/^prod_sendro_/);
+    expect(createdA.stripePriceId).toMatch(/^price_sendro_/);
 
     const createB = await companyAgent
       .post("/trpc/pricingRules.create")
@@ -146,6 +159,8 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
     const updated = pricingRuleSchema.parse(trpcJson(updateResponse));
     expect(updated.amountCents).toBe(1390);
     expect(updated.weightMaxGrams).toBe(1200);
+    expect(updated.stripeProductId).toBe(createdA.stripeProductId);
+    expect(updated.stripePriceId).toMatch(/^price_sendro_/);
 
     const [stored] = await db
       .select()
@@ -155,10 +170,17 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
 
     expect(stored?.amountCents).toBe(1390);
     expect(stored?.weightMaxGrams).toBe(1200);
+    expect(stored?.stripeProductId).toBe(updated.stripeProductId);
+    expect(stored?.stripePriceId).toBe(updated.stripePriceId);
   }, 30000);
 
   it("blocks non-company roles and returns validation/conflict errors", async () => {
     const suffix = Date.now() + 1;
+    const syncSpy = vi.spyOn(stripeLib, "syncPricingRuleCatalog").mockImplementation(async (input: stripeLib.SyncPricingRuleCatalogInput) => ({
+      stripeProductId: `prod_sendro_${input.ruleId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 16)}`,
+      stripePriceId: `price_sendro_${input.amountCents}`,
+      mode: "stub"
+    }));
 
     const companyAgent = await registerAndLogin(app, {
       role: "company",
@@ -243,6 +265,23 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
 
     expect(duplicate.status).toBe(409);
     expect(trpcErrorMessage(duplicate)).toContain("pricing_rules_conflict:duplicate_company_key");
+
+    syncSpy.mockRejectedValueOnce(new stripeLib.PricingRuleCatalogSyncError("timeout", "pricing_rules_stripe_sync_failed:timeout"));
+
+    const syncFailureResponse = await companyAgent
+      .post("/trpc/pricingRules.create")
+      .set("origin", "http://localhost:3000")
+      .send({
+        region: "MG",
+        deliveryType: "same_day",
+        weightMinGrams: 0,
+        weightMaxGrams: 5000,
+        amountCents: 1700,
+        currency: "BRL"
+      });
+
+    expect(syncFailureResponse.status).toBe(500);
+    expect(trpcErrorMessage(syncFailureResponse)).toContain("pricing_rules_stripe_sync_failed:timeout");
   }, 30000);
 
   it("keeps boundary contracts explicit for open-ended and exact range matching payloads", async () => {
@@ -317,8 +356,8 @@ describe("pricing rules deterministic stripe catalog sync", () => {
       currency: "BRL" as const
     };
 
-    const first = await syncPricingRuleCatalog(input);
-    const second = await syncPricingRuleCatalog(input);
+    const first = await stripeLib.syncPricingRuleCatalog(input);
+    const second = await stripeLib.syncPricingRuleCatalog(input);
 
     expect(first.mode).toBe("stub");
     expect(first.stripeProductId).toMatch(/^prod_sendro_/);
@@ -328,7 +367,7 @@ describe("pricing rules deterministic stripe catalog sync", () => {
 
   it("rejects malformed identity input in deterministic mode", async () => {
     await expect(
-      syncPricingRuleCatalog({
+      stripeLib.syncPricingRuleCatalog({
         companyId: "   ",
         ruleId: "rule-123",
         region: "SP-CAPITAL",
@@ -356,7 +395,7 @@ describe("pricing rules deterministic stripe catalog sync", () => {
       }
     };
 
-    const result = await syncPricingRuleCatalog({
+    const result = await stripeLib.syncPricingRuleCatalog({
       companyId: "company-123",
       ruleId: "rule-123",
       region: "SP-CAPITAL",
