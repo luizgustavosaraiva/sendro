@@ -3,10 +3,11 @@ import { parse as parseQuery } from "node:querystring";
 import LoginPage from "./app/(auth)/login/page";
 import RegisterPage from "./app/(auth)/register/page";
 import { renderDashboardPage } from "./app/(app)/dashboard/page";
+import { renderBillingPage } from "./app/(app)/dashboard/billing/page";
 import { renderWhatsAppPage } from "./app/(app)/dashboard/whatsapp/page";
 import { authClient } from "./lib/auth-client";
 import { getSessionFromRequest } from "./lib/auth";
-import { type CreateDeliveryInput, type DeliveryCompletionInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
+import { type CreateDeliveryInput, type DeliveryCompletionInput, type PricingRuleCreateInput, type ResolveDriverOfferInput, type TransitionDeliveryInput } from "@repo/shared";
 import {
   getCurrentUser,
   getDashboardCompanyViewModel,
@@ -121,6 +122,25 @@ const rerenderDashboard = async (
   }
 
   sendHtml(response, renderDashboardPage(viewModel));
+};
+
+const rerenderBilling = async (
+  response: import("node:http").ServerResponse,
+  cookieHeader: string | null | undefined,
+  options?: Parameters<typeof getDashboardCompanyViewModel>[1]
+) => {
+  const viewModel = await getDashboardCompanyViewModel(cookieHeader ?? null, options);
+
+  if (!viewModel?.user) {
+    sendHtml(
+      response,
+      `<!DOCTYPE html><html><body><main><h1>Cobrança indisponível</h1><p role="alert">SSR session resolved but billing data failed before rendering.</p></main></body></html>`,
+      502
+    );
+    return;
+  }
+
+  sendHtml(response, renderBillingPage(viewModel));
 };
 
 const normalizeMaybeNull = (value: string | undefined) => {
@@ -426,6 +446,41 @@ export const server = createServer(async (request, response) => {
       }
 
       await rerenderDashboard(response, request.headers.cookie ?? null);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/dashboard/billing") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      await rerenderBilling(response, request.headers.cookie ?? null);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/dashboard/billing") {
+      const fetchRequest = requestToFetchRequest(request);
+      const session = await getSessionFromRequest(fetchRequest);
+      if (!session?.user) {
+        redirect(response, "/login");
+        return;
+      }
+
+      const form = await parseBody(request);
+      const toNumber = (value: string | undefined) => Number(String(value ?? "").trim());
+      const createPricingRule: PricingRuleCreateInput = {
+        region: String(form.region ?? "").trim(),
+        deliveryType: String(form.deliveryType ?? "").trim(),
+        weightMinGrams: toNumber(form.weightMinGrams),
+        weightMaxGrams: String(form.weightMaxGrams ?? "").trim() === "" ? null : toNumber(form.weightMaxGrams),
+        amountCents: toNumber(form.amountCents),
+        currency: "BRL"
+      };
+
+      await rerenderBilling(response, request.headers.cookie ?? null, { createPricingRule });
       return;
     }
 

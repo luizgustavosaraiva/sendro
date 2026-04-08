@@ -16,6 +16,8 @@ import {
   operationsSummarySchema,
   companyDriversOperationalListSchema,
   connectResultSchema,
+  pricingRuleCreateSchema,
+  pricingRuleListResultSchema,
   whatsappSessionStatusSchema,
   type CompanyDriverOperationalState,
   type ConnectResult,
@@ -26,6 +28,8 @@ import {
   type DeliveryStatus,
   type DriverStrike,
   type OperationsSummary,
+  type PricingRule,
+  type PricingRuleCreateInput,
   type ReprocessDispatchTimeoutsResult,
   type ResolveDriverOfferInput,
   type ResolveDriverOfferResult,
@@ -155,6 +159,16 @@ export type DashboardCompanyDeliveriesViewModel = {
   };
 };
 
+export type DashboardCompanyBillingViewModel = {
+  state: "loaded" | "empty" | "error" | "not-company";
+  rules: PricingRule[];
+  error?: string;
+  createFeedback?: {
+    ruleId: string;
+    message: string;
+  };
+};
+
 export type DashboardCompanyViewModel = {
   user: CurrentUser["user"];
   profile?: CurrentUser["profile"];
@@ -172,6 +186,7 @@ export type DashboardCompanyViewModel = {
   retailerDeliveries: DashboardRetailerDeliveriesViewModel;
   companyDeliveries: DashboardCompanyDeliveriesViewModel;
   driverDeliveries: DashboardDriverDeliveriesViewModel;
+  billing?: DashboardCompanyBillingViewModel;
 };
 
 const defaultBondLists = (): CompanyBondLists => ({
@@ -208,6 +223,11 @@ const defaultDriverDeliveriesViewModel = (): DashboardDriverDeliveriesViewModel 
     bondStatus: null
   },
   strikeState: "empty",
+  state: "empty"
+});
+
+const defaultBillingViewModel = (): DashboardCompanyBillingViewModel => ({
+  rules: [],
   state: "empty"
 });
 
@@ -410,6 +430,17 @@ export const createCompanyInvitation = async (
   return result.kind === "unauthorized" ? null : result.data;
 };
 
+export const listCompanyPricingRules = async (cookieHeader?: string | null) => {
+  const result = await fetchTrpc("pricingRules.list", pricingRuleListResultSchema, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
+export const createCompanyPricingRule = async (input: PricingRuleCreateInput, cookieHeader?: string | null) => {
+  const parsedInput = pricingRuleCreateSchema.parse(input);
+  const result = await postTrpc("pricingRules.create", parsedInput, pricingRuleListResultSchema.element, cookieHeader);
+  return result.kind === "unauthorized" ? null : result.data;
+};
+
 const buildDriverStrikeSummary = (deliveries: DeliveryListItem[]) => {
   const strikes = deliveries.flatMap((delivery) => delivery.dispatch?.strikes ?? []);
   if (strikes.length === 0) {
@@ -457,6 +488,7 @@ export const getDashboardCompanyViewModel = async (
     completeDelivery?: DeliveryCompletionInput | null;
     reprocessDispatch?: { nowIso?: string; companyId?: string } | null;
     resolveDriverOffer?: ResolveDriverOfferInput | null;
+    createPricingRule?: PricingRuleCreateInput | null;
   }
 ): Promise<DashboardCompanyViewModel | null> => {
   const currentUser = await getCurrentUser(cookieHeader);
@@ -583,7 +615,12 @@ export const getDashboardCompanyViewModel = async (
         state: "not-company",
         error: "Somente contas empresa visualizam a fila operacional de entregas."
       },
-      driverDeliveries
+      driverDeliveries,
+      billing: {
+        rules: [],
+        state: "not-company",
+        error: "Somente contas empresa podem gerenciar regras de cobrança."
+      }
     };
   }
 
@@ -625,6 +662,11 @@ export const getDashboardCompanyViewModel = async (
           offerState: "not-driver",
           strikeState: "not-driver",
           error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
+        },
+        billing: {
+          rules: [],
+          state: "not-company",
+          error: "Somente contas empresa podem gerenciar regras de cobrança."
         }
       };
     }
@@ -708,6 +750,11 @@ export const getDashboardCompanyViewModel = async (
         offerState: "not-driver",
         strikeState: "not-driver",
         error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
+      },
+      billing: {
+        rules: [],
+        state: "not-company",
+        error: "Somente contas empresa podem gerenciar regras de cobrança."
       }
     };
   }
@@ -741,6 +788,70 @@ export const getDashboardCompanyViewModel = async (
   let driversError: string | undefined;
 
   let invitations = defaultInvitationViewModel();
+
+  let billing = defaultBillingViewModel();
+
+  try {
+    let createFeedback: DashboardCompanyBillingViewModel["createFeedback"];
+
+    if (options?.createPricingRule) {
+      try {
+        const created = await createCompanyPricingRule(options.createPricingRule, cookieHeader);
+        if (!created) {
+          billing = {
+            rules: [],
+            state: "error",
+            error: "A sessão foi resolvida, mas a regra de cobrança não pôde ser criada porque a autenticação SSR não foi aceita pela API."
+          };
+        } else {
+          createFeedback = {
+            ruleId: created.ruleId,
+            message: `Regra ${created.ruleId} criada para ${created.region}/${created.deliveryType}.`
+          };
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "pricing_rule_create_failed";
+        billing = {
+          rules: [],
+          state: "error",
+          error: `Falha ao criar regra de cobrança. Diagnóstico: ${detail}`
+        };
+      }
+    }
+
+    if (billing.state !== "error") {
+      try {
+        const rows = await listCompanyPricingRules(cookieHeader);
+        if (!rows) {
+          billing = {
+            rules: [],
+            state: "error",
+            error: "A sessão foi resolvida, mas a lista de regras de cobrança não pôde ser carregada."
+          };
+        } else {
+          billing = {
+            rules: rows,
+            state: rows.length > 0 ? "loaded" : "empty",
+            createFeedback
+          };
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "pricing_rule_list_failed";
+        billing = {
+          rules: [],
+          state: "error",
+          error: `Falha ao carregar regras de cobrança. Diagnóstico: ${detail}`
+        };
+      }
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "billing_unknown_failure";
+    billing = {
+      rules: [],
+      state: "error",
+      error: `Falha ao resolver o bloco de cobrança no SSR. Diagnóstico: ${detail}`
+    };
+  }
 
   try {
     let generatedInvitation: DashboardCompanyInvitationViewModel["generatedInvitation"];
@@ -989,7 +1100,8 @@ export const getDashboardCompanyViewModel = async (
       offerState: "not-driver",
       strikeState: "not-driver",
       error: "Somente entregadores visualizam ofertas e strikes próprios no dashboard."
-    }
+    },
+    billing
   };
 };
 
