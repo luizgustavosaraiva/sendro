@@ -34,11 +34,18 @@ const mapPricingRule = (row: PricingRuleRecord): PricingRule => ({
 });
 
 const asDbError = (error: unknown): DbError => {
-  if (error && typeof error === "object") {
-    return error as DbError;
+  if (!error || typeof error !== "object") {
+    return {};
   }
 
-  return {};
+  const base = error as DbError & { cause?: unknown };
+  const cause = base.cause && typeof base.cause === "object" ? (base.cause as DbError) : undefined;
+
+  return {
+    code: base.code ?? cause?.code,
+    constraint: base.constraint ?? cause?.constraint,
+    message: base.message ?? cause?.message
+  };
 };
 
 const mapMutationError = (error: unknown): never => {
@@ -50,7 +57,8 @@ const mapMutationError = (error: unknown): never => {
   const isConflict =
     dbError.code === "23505" ||
     dbError.constraint === "pricing_rules_company_key_unique" ||
-    dbError.message?.includes("pricing_rules_company_key_unique");
+    dbError.message?.includes("pricing_rules_company_key_unique") ||
+    dbError.message?.toLowerCase().includes("duplicate key value violates unique constraint");
 
   if (isConflict) {
     throw pricingError("CONFLICT", "pricing_rules_conflict:duplicate_company_key");

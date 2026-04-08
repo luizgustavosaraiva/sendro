@@ -50,6 +50,20 @@
       "when": 1744039200000,
       "tag": "0006_whatsapp_contact_role",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775617700000,
+      "tag": "0007_pricing_rules",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1775618789038,
+      "tag": "0008_stripe_connect_onboarding",
+      "breakpoints": true
     }
   ]
 }

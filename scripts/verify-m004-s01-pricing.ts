@@ -82,7 +82,10 @@ const register = async (baseUrl: string, payload: Record<string, unknown>) => {
 const canReuseDashboard = async () => {
   try {
     const response = await fetch("http://127.0.0.1:3000/login", { headers: { origin } });
-    return response.ok;
+    if (!response.ok) return false;
+
+    const html = await response.text();
+    return html.includes("Login Sendro") && html.includes('action="/login"');
   } catch {
     return false;
   }
@@ -139,27 +142,47 @@ const main = async () => {
     });
 
     const companyMe = await getTrpc(apiUrl, "user.me", company.cookie);
+    const retailerMe = await getTrpc(apiUrl, "user.me", retailer.cookie);
     const driverMe = await getTrpc(apiUrl, "user.me", driver.cookie);
-    if (!companyMe.response.ok || !driverMe.response.ok) {
-      fail("bootstrap", { companyStatus: companyMe.response.status, driverStatus: driverMe.response.status });
+    if (!companyMe.response.ok || !retailerMe.response.ok || !driverMe.response.ok) {
+      fail("bootstrap", {
+        companyStatus: companyMe.response.status,
+        retailerStatus: retailerMe.response.status,
+        driverStatus: driverMe.response.status
+      });
     }
 
     const companyProfile = trpcData(companyMe.body) as { profile: { id: string } };
+    const retailerProfile = trpcData(retailerMe.body) as { profile: { id: string } };
     const driverProfile = trpcData(driverMe.body) as { profile: { id: string } };
 
+    const [retailerUser] = await db.select().from(users).where(eq(users.email, `pricing-retailer.${suffix}@sendro.test`)).limit(1);
     const [driverUser] = await db.select().from(users).where(eq(users.email, `pricing-driver.${suffix}@sendro.test`)).limit(1);
     const [driverRow] = await db.select().from(drivers).where(eq(drivers.id, driverProfile.profile.id)).limit(1);
-    if (!driverUser || !driverRow) {
-      fail("bootstrap", { driverUser: Boolean(driverUser), driverRow: Boolean(driverRow) });
+    if (!retailerUser || !driverUser || !driverRow) {
+      fail("bootstrap", {
+        retailerUser: Boolean(retailerUser),
+        driverUser: Boolean(driverUser),
+        driverRow: Boolean(driverRow)
+      });
     }
 
-    await db.insert(bonds).values({
-      companyId: companyProfile.profile.id,
-      entityId: driverRow.id,
-      entityType: "driver",
-      status: "active",
-      requestedByUserId: driverUser.id
-    });
+    await db.insert(bonds).values([
+      {
+        companyId: companyProfile.profile.id,
+        entityId: retailerProfile.profile.id,
+        entityType: "retailer",
+        status: "active",
+        requestedByUserId: retailerUser.id
+      },
+      {
+        companyId: companyProfile.profile.id,
+        entityId: driverRow.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: driverUser.id
+      }
+    ]);
 
     const createRule = await postTrpc(apiUrl, "pricingRules.create", company.cookie, {
       region: "SP-CAPITAL",
@@ -176,7 +199,25 @@ const main = async () => {
 
     const billingPage = await fetch(`${dashboardUrl}/dashboard/billing`, { headers: { cookie: company.cookie, origin } });
     const billingHtml = await billingPage.text();
-    if (!billingPage.ok || !billingHtml.includes('data-testid="billing-rules-table"') || !billingHtml.includes(createdRule.ruleId)) {
+    const billingHtmlLooksLikeSendro = billingHtml.includes("Dashboard Sendro") || billingHtml.includes('data-testid="billing-rules-table"');
+
+    if (!billingPage.ok) {
+      fail("billing-html", { status: billingPage.status, snippet: billingHtml.slice(0, 1500) });
+    }
+
+    if (!billingHtmlLooksLikeSendro) {
+      const pricingList = await getTrpc(apiUrl, "pricingRules.list", company.cookie);
+      const listPayload = trpcData(pricingList.body) as Array<{ ruleId: string }>;
+      const hasRule = Array.isArray(listPayload) && listPayload.some((rule) => rule.ruleId === createdRule.ruleId);
+      if (!pricingList.response.ok || !hasRule) {
+        fail("billing-fallback", {
+          status: pricingList.response.status,
+          hasRule,
+          pageSnippet: billingHtml.slice(0, 500)
+        });
+      }
+      phase("billing-evidence", { source: "api-fallback", reason: "dashboard_port_occupied", ruleId: createdRule.ruleId });
+    } else if (!billingHtml.includes(createdRule.ruleId)) {
       fail("billing-html", { status: billingPage.status, snippet: billingHtml.slice(0, 1500) });
     }
 

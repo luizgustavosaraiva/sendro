@@ -135,6 +135,10 @@ export const companies = pgTable(
     slug: varchar("slug", { length: 120 }).notNull(),
     lifecycle: companyLifecycleEnum("lifecycle").default("onboarding").notNull(),
     stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+    stripeAccountId: varchar("stripe_account_id", { length: 255 }),
+    stripeChargesEnabled: boolean("stripe_charges_enabled"),
+    stripePayoutsEnabled: boolean("stripe_payouts_enabled"),
+    stripeConnectedAt: timestamp("stripe_connected_at", { withTimezone: true }),
     proofRequiredNote: boolean("proof_required_note").default(false).notNull(),
     proofRequiredPhoto: boolean("proof_required_photo").default(false).notNull(),
     ...timestamps
@@ -142,7 +146,9 @@ export const companies = pgTable(
   (table) => ({
     userIdx: uniqueIndex("companies_user_id_unique").on(table.userId),
     slugIdx: uniqueIndex("companies_slug_unique").on(table.slug),
-    stripeIdx: uniqueIndex("companies_stripe_customer_id_unique").on(table.stripeCustomerId)
+    stripeIdx: uniqueIndex("companies_stripe_customer_id_unique").on(table.stripeCustomerId),
+    stripeAccountIdx: uniqueIndex("companies_stripe_account_id_unique").on(table.stripeAccountId),
+    stripeCapabilitiesIdx: index("companies_stripe_capabilities_idx").on(table.stripeChargesEnabled, table.stripePayoutsEnabled)
   })
 );
 
