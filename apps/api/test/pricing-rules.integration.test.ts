@@ -1,9 +1,10 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import request from "supertest";
 import { assertDb, pricingRules } from "@repo/db";
 import { and, eq } from "drizzle-orm";
 import { pricingRuleCreateSchema, pricingRuleListResultSchema, pricingRuleSchema, pricingRuleUpdateSchema } from "@repo/shared";
+import { PricingRuleCatalogSyncError, syncPricingRuleCatalog } from "../src/lib/stripe";
 import { buildApp } from "../src/index";
 
 const registerAndLogin = async (
@@ -52,7 +53,7 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
     }
   }, 30000);
 
-  it("creates, lists, updates company-scoped pricing rules with deterministic ordering", async () => {
+  it("creates, lists, updates company-scoped pricing rules with stable ordering", async () => {
     const { db } = assertDb();
     const suffix = Date.now();
 
@@ -156,7 +157,7 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
     expect(stored?.weightMaxGrams).toBe(1200);
   }, 30000);
 
-  it("blocks non-company roles and returns deterministic validation/conflict errors", async () => {
+  it("blocks non-company roles and returns validation/conflict errors", async () => {
     const suffix = Date.now() + 1;
 
     const companyAgent = await registerAndLogin(app, {
@@ -300,5 +301,77 @@ describe.skipIf(!process.env.DATABASE_URL)("pricing rules integration", () => {
     });
 
     expect(invalidRange.success).toBe(false);
+  });
+});
+
+describe("pricing rules deterministic stripe catalog sync", () => {
+  it("returns deterministic stub catalog ids for the same payload", async () => {
+    const input = {
+      companyId: "company-123",
+      ruleId: "rule-123",
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightMinGrams: 0,
+      weightMaxGrams: 1000,
+      amountCents: 1290,
+      currency: "BRL" as const
+    };
+
+    const first = await syncPricingRuleCatalog(input);
+    const second = await syncPricingRuleCatalog(input);
+
+    expect(first.mode).toBe("stub");
+    expect(first.stripeProductId).toMatch(/^prod_sendro_/);
+    expect(first.stripePriceId).toMatch(/^price_sendro_/);
+    expect(second).toEqual(first);
+  });
+
+  it("rejects malformed identity input in deterministic mode", async () => {
+    await expect(
+      syncPricingRuleCatalog({
+        companyId: "   ",
+        ruleId: "rule-123",
+        region: "SP-CAPITAL",
+        deliveryType: "same_day",
+        weightMinGrams: 0,
+        weightMaxGrams: 1000,
+        amountCents: 1290,
+        currency: "BRL"
+      })
+    ).rejects.toMatchObject({
+      name: "PricingRuleCatalogSyncError",
+      code: "pricing_rules_stripe_sync_failed",
+      reason: "invalid_input"
+    });
+  });
+
+  it("keeps deterministic stub mode independent from live stripe client failures", async () => {
+    const stripeClient = {
+      products: {
+        create: vi.fn().mockRejectedValue(new Error("network down with sk_live_secret"))
+      },
+      prices: {
+        retrieve: vi.fn(),
+        create: vi.fn()
+      }
+    };
+
+    const result = await syncPricingRuleCatalog({
+      companyId: "company-123",
+      ruleId: "rule-123",
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightMinGrams: 0,
+      weightMaxGrams: 1000,
+      amountCents: 1290,
+      currency: "BRL",
+      stripeClient,
+      timeoutMs: 50
+    });
+
+    expect(result.mode).toBe("stub");
+    expect(stripeClient.products.create).not.toHaveBeenCalled();
+    expect(stripeClient.prices.create).not.toHaveBeenCalled();
+    expect(stripeClient.prices.retrieve).not.toHaveBeenCalled();
   });
 });

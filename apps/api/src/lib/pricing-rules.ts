@@ -29,6 +29,8 @@ const mapPricingRule = (row: PricingRuleRecord): PricingRule => ({
   weightMaxGrams: row.weightMaxGrams,
   amountCents: row.amountCents,
   currency: row.currency as PricingRule["currency"],
+  stripeProductId: row.stripeProductId,
+  stripePriceId: row.stripePriceId,
   createdAt: toIso(row.createdAt),
   updatedAt: toIso(row.updatedAt)
 });
