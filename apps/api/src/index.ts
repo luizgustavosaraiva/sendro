@@ -11,6 +11,7 @@ import { env } from "./env";
 import { lookupInvitationByToken } from "./lib/invitations";
 import { ensureProfileForUser } from "./routes/auth/register";
 import { registerWhatsAppWebhook } from "./routes/whatsapp/webhook";
+import { registerStripeWebhook } from "./routes/stripe/webhook";
 import { appRouter } from "./trpc/router";
 import { createTrpcContext } from "./trpc/context";
 
@@ -192,6 +193,33 @@ const ensureDispatchSchemaForTests = async () => {
 
 let whatsappSchemaInitPromise: Promise<void> | null = null;
 
+let stripeConnectSchemaInitPromise: Promise<void> | null = null;
+
+const ensureStripeConnectSchemaForTests = async () => {
+  if (env.NODE_ENV !== "test") return;
+  if (!stripeConnectSchemaInitPromise) {
+    stripeConnectSchemaInitPromise = (async () => {
+      const { pool } = assertDb();
+      const client = await pool.connect();
+      try {
+        await client.query("alter table companies add column if not exists stripe_account_id varchar(255)");
+        await client.query("alter table companies add column if not exists stripe_charges_enabled boolean");
+        await client.query("alter table companies add column if not exists stripe_payouts_enabled boolean");
+        await client.query("alter table companies add column if not exists stripe_connected_at timestamp with time zone");
+        await client.query(
+          "create unique index if not exists companies_stripe_account_id_unique on companies (stripe_account_id)"
+        );
+        await client.query(
+          "create index if not exists companies_stripe_capabilities_idx on companies (stripe_charges_enabled, stripe_payouts_enabled)"
+        );
+      } finally {
+        client.release();
+      }
+    })();
+  }
+  await stripeConnectSchemaInitPromise;
+};
+
 const ensureWhatsappSchemaForTests = async () => {
   if (env.NODE_ENV !== "test") return;
   if (!whatsappSchemaInitPromise) {
@@ -228,8 +256,18 @@ const ensureWhatsappSchemaForTests = async () => {
 export const buildApp = async () => {
   await ensureDispatchSchemaForTests();
   await ensureWhatsappSchemaForTests();
+  await ensureStripeConnectSchemaForTests();
 
   const app = Fastify({ logger: env.NODE_ENV !== "test" });
+
+  app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
+    try {
+      (request as { rawBody?: string }).rawBody = body;
+      done(null, body.length > 0 ? JSON.parse(body) : {});
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  });
 
   await app.register(cors, {
     origin: env.DASHBOARD_URL,
@@ -261,6 +299,7 @@ export const buildApp = async () => {
   });
 
   registerWhatsAppWebhook(app);
+  registerStripeWebhook(app);
 
   app.get("/api/invitations/:token", async (request, reply) => {
     const { token } = request.params as { token: string };

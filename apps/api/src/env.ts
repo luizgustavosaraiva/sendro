@@ -21,6 +21,7 @@ const envSchema = z.object({
   DASHBOARD_URL: z.string().url().default("http://localhost:3000"),
   BETTER_AUTH_SECRET: z.string().min(1),
   STRIPE_API_KEY: z.string().min(1).optional(),
+  STRIPE_CONNECT_WEBHOOK_SECRET: z.string().min(1).optional(),
   EVOLUTION_API_URL: z.string().url().optional(),
   EVOLUTION_API_KEY: z.string().optional(),
   OPENAI_API_KEY: z.string().optional(),

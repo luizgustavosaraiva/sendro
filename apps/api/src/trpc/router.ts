@@ -33,7 +33,10 @@ import {
   pricingRuleListResultSchema,
   pricingRuleListSchema,
   pricingRuleSchema,
-  pricingRuleUpdateSchema
+  pricingRuleUpdateSchema,
+  billingConnectOnboardingCreateResultSchema,
+  billingConnectOnboardingCreateSchema,
+  billingConnectStatusSchema
 } from "@repo/shared";
 import { ensureProfileForUser } from "../routes/auth/register";
 import {
@@ -62,6 +65,7 @@ import {
   redeemInvitation
 } from "../lib/invitations";
 import { createPricingRule, listPricingRules, updatePricingRule } from "../lib/pricing-rules";
+import { createBillingConnectOnboardingForUser, getBillingConnectStatusForUser } from "../lib/billing-connect";
 import { protectedProcedure, publicProcedure, router } from "./procedures";
 import { whatsappRouter } from "./whatsapp-router";
 
@@ -183,6 +187,15 @@ export const appRouter = router({
       .input(pricingRuleUpdateSchema)
       .output(pricingRuleSchema)
       .mutation(async ({ ctx, input }) => updatePricingRule({ user: ctx.session.user as never, data: input }))
+  }),
+  billing: router({
+    connectStripe: protectedProcedure
+      .input(billingConnectOnboardingCreateSchema)
+      .output(billingConnectOnboardingCreateResultSchema)
+      .mutation(async ({ ctx, input }) => createBillingConnectOnboardingForUser({ user: ctx.session.user as never, data: input })),
+    connectStatus: protectedProcedure
+      .output(billingConnectStatusSchema)
+      .query(async ({ ctx }) => getBillingConnectStatusForUser(ctx.session.user as never))
   }),
   whatsapp: whatsappRouter
 });
