@@ -28,7 +28,12 @@ import {
   transitionDeliverySchema,
   waitingQueueFiltersSchema,
   waitingQueueListSchema,
-  listDeliveriesSchema
+  listDeliveriesSchema,
+  pricingRuleCreateSchema,
+  pricingRuleListResultSchema,
+  pricingRuleListSchema,
+  pricingRuleSchema,
+  pricingRuleUpdateSchema
 } from "@repo/shared";
 import { ensureProfileForUser } from "../routes/auth/register";
 import {
@@ -56,6 +61,7 @@ import {
   lookupInvitationByToken,
   redeemInvitation
 } from "../lib/invitations";
+import { createPricingRule, listPricingRules, updatePricingRule } from "../lib/pricing-rules";
 import { protectedProcedure, publicProcedure, router } from "./procedures";
 import { whatsappRouter } from "./whatsapp-router";
 
@@ -163,6 +169,20 @@ export const appRouter = router({
       .input(reprocessDispatchTimeoutsSchema.optional())
       .output(reprocessDispatchTimeoutsResultSchema)
       .mutation(async ({ ctx, input }) => reprocessDispatchTimeouts({ user: ctx.session.user as never, data: input }))
+  }),
+  pricingRules: router({
+    list: protectedProcedure
+      .input(pricingRuleListSchema.optional())
+      .output(pricingRuleListResultSchema)
+      .query(async ({ ctx, input }) => listPricingRules({ user: ctx.session.user as never, filters: input })),
+    create: protectedProcedure
+      .input(pricingRuleCreateSchema)
+      .output(pricingRuleSchema)
+      .mutation(async ({ ctx, input }) => createPricingRule({ user: ctx.session.user as never, data: input })),
+    update: protectedProcedure
+      .input(pricingRuleUpdateSchema)
+      .output(pricingRuleSchema)
+      .mutation(async ({ ctx, input }) => updatePricingRule({ user: ctx.session.user as never, data: input }))
   }),
   whatsapp: whatsappRouter
 });

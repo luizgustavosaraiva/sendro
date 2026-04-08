@@ -377,6 +377,39 @@ export const deliveryEvents = pgTable(
   })
 );
 
+export const pricingRules = pgTable(
+  "pricing_rules",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    companyId: uuid("company_id")
+      .notNull()
+      .references(() => companies.id, { onDelete: "cascade" }),
+    region: varchar("region", { length: 120 }).notNull(),
+    deliveryType: varchar("delivery_type", { length: 80 }).notNull(),
+    weightMinGrams: integer("weight_min_grams").notNull(),
+    weightMaxGrams: integer("weight_max_grams"),
+    amountCents: integer("amount_cents").notNull(),
+    currency: varchar("currency", { length: 3 }).default("BRL").notNull(),
+    ...timestamps
+  },
+  (table) => ({
+    companyKeyUniqueIdx: uniqueIndex("pricing_rules_company_key_unique").on(
+      table.companyId,
+      table.region,
+      table.deliveryType,
+      table.weightMinGrams,
+      table.weightMaxGrams
+    ),
+    companyOrderIdx: index("pricing_rules_company_order_idx").on(
+      table.companyId,
+      table.region,
+      table.deliveryType,
+      table.weightMinGrams,
+      table.weightMaxGrams
+    )
+  })
+);
+
 export const usersRelations = relations(users, ({ many, one }) => ({
   sessions: many(sessions),
   accounts: many(accounts),
@@ -417,7 +450,8 @@ export const companiesRelations = relations(companies, ({ one, many }) => ({
   }),
   bonds: many(bonds),
   invitations: many(invitations),
-  deliveries: many(deliveries)
+  deliveries: many(deliveries),
+  pricingRules: many(pricingRules)
 }));
 
 export const retailersRelations = relations(retailers, ({ one, many }) => ({
@@ -547,6 +581,13 @@ export const deliveryEventsRelations = relations(deliveryEvents, ({ one }) => ({
   })
 }));
 
+export const pricingRulesRelations = relations(pricingRules, ({ one }) => ({
+  company: one(companies, {
+    fields: [pricingRules.companyId],
+    references: [companies.id]
+  })
+}));
+
 import { whatsappSessions, conversationStates, whatsappContactMappings } from "./whatsapp";
 
 export const schema = {
@@ -582,6 +623,7 @@ export const schema = {
   dispatchAttempts,
   driverStrikes,
   deliveryEvents,
+  pricingRules,
   whatsappSessions,
   conversationStates,
   whatsappContactMappings
