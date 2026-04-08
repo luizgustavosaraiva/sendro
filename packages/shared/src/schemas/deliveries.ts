@@ -114,7 +114,8 @@ export const dispatchRankingComponentSchema = z.object({
   value: z.union([z.number(), z.string()]),
   direction: z.enum(["asc", "desc"]),
   provisional: z.boolean(),
-  assumption: z.string()
+  assumption: z.string(),
+  diagnostic: z.string().optional()
 });
 
 export const dispatchCandidateSnapshotSchema = z.object({

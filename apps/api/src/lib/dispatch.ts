@@ -1,5 +1,5 @@
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, gte, inArray, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import {
   assertDb,
   companies,
@@ -9,7 +9,8 @@ import {
   dispatchAttempts,
   dispatchQueueEntries,
   drivers,
-  driverStrikes
+  driverStrikes,
+  pricingRules
 } from "@repo/db";
 import { notifyDriverOfferViaWhatsApp } from "./whatsapp/notifications";
 import type {
@@ -76,6 +77,8 @@ type CandidateSeed = {
   distanceScore: number;
   regionScore: string;
   priceScore: number;
+  priceDiagnostic: string;
+  priceAssumption: string;
 };
 
 type DispatchInitializationResult = {
@@ -90,7 +93,7 @@ const DISPATCH_ASSUMPTIONS = [
   "queue uses active bond creation order until richer driver capacity signals arrive in S02/S03",
   "distance is approximated by stable lexical proxy because geo coordinates are not available yet",
   "region is approximated by shared pickup/dropoff text tokens until explicit region modeling lands",
-  "price uses a neutral placeholder score until company pricing rules exist in later milestones"
+  "price uses company pricing rules when delivery metadata is matchable, otherwise explicit fallback diagnostics are emitted"
 ] as const;
 
 const OPERATIONS_SUMMARY_ASSUMPTIONS = [
@@ -427,24 +430,157 @@ const normalizedTextScore = (value: string | null | undefined) => {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 };
 
+type DeliveryPricingAttributes = {
+  region: string;
+  deliveryType: string;
+  weightGrams: number;
+};
+
+type PricingMatchResult = {
+  score: number;
+  assumption: string;
+  diagnostic: string;
+};
+
+const asString = (value: unknown): string | null => {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const asFiniteNumber = (value: unknown): number | null => {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  return null;
+};
+
+const resolveDeliveryPricingAttributes = (delivery: DeliveryRecord): DeliveryPricingAttributes | null => {
+  const metadata = asMetadata(delivery.metadata);
+  const region = asString(metadata.region) ?? asString(metadata.pricingRegion) ?? asString(metadata.destinationRegion);
+  const deliveryType =
+    asString(metadata.deliveryType) ?? asString(metadata.delivery_type) ?? asString(metadata.serviceLevel);
+  const weightGrams =
+    asFiniteNumber(metadata.weightGrams) ??
+    asFiniteNumber(metadata.weight_grams) ??
+    asFiniteNumber(metadata.packageWeightGrams);
+
+  if (!region || !deliveryType || weightGrams === null || weightGrams < 0) {
+    return null;
+  }
+
+  return {
+    region,
+    deliveryType,
+    weightGrams
+  };
+};
+
+const chooseBestPricingRule = (rows: Array<typeof pricingRules.$inferSelect>) => {
+  if (rows.length === 0) {
+    return null;
+  }
+
+  const sorted = [...rows].sort((left, right) => {
+    const leftSpan = (left.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) - left.weightMinGrams;
+    const rightSpan = (right.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) - right.weightMinGrams;
+
+    if (leftSpan !== rightSpan) return leftSpan - rightSpan;
+    if (left.weightMinGrams !== right.weightMinGrams) return right.weightMinGrams - left.weightMinGrams;
+    if ((left.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) !== (right.weightMaxGrams ?? Number.MAX_SAFE_INTEGER)) {
+      return (left.weightMaxGrams ?? Number.MAX_SAFE_INTEGER) - (right.weightMaxGrams ?? Number.MAX_SAFE_INTEGER);
+    }
+
+    const createdAtDiff = new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
+    if (createdAtDiff !== 0) return createdAtDiff;
+
+    return left.id.localeCompare(right.id);
+  });
+
+  return sorted[0] ?? null;
+};
+
+const resolvePriceMatchForDelivery = async (input: {
+  tx: DbTransaction;
+  companyId: string;
+  delivery: DeliveryRecord;
+}): Promise<PricingMatchResult> => {
+  const attributes = resolveDeliveryPricingAttributes(input.delivery);
+  if (!attributes) {
+    return {
+      score: 0,
+      assumption: DISPATCH_ASSUMPTIONS[3],
+      diagnostic: "fallback:delivery_metadata_unmatchable"
+    };
+  }
+
+  try {
+    const candidateRules = await input.tx
+      .select()
+      .from(pricingRules)
+      .where(
+        and(
+          eq(pricingRules.companyId, input.companyId),
+          eq(pricingRules.region, attributes.region),
+          eq(pricingRules.deliveryType, attributes.deliveryType),
+          lte(pricingRules.weightMinGrams, attributes.weightGrams),
+          or(isNull(pricingRules.weightMaxGrams), gte(pricingRules.weightMaxGrams, attributes.weightGrams))
+        )
+      )
+      .orderBy(asc(pricingRules.weightMinGrams), asc(pricingRules.weightMaxGrams), asc(pricingRules.createdAt));
+
+    const matchedRule = chooseBestPricingRule(candidateRules);
+    if (!matchedRule) {
+      return {
+        score: 0,
+        assumption: DISPATCH_ASSUMPTIONS[3],
+        diagnostic: "fallback:no_pricing_rule_match"
+      };
+    }
+
+    return {
+      score: matchedRule.amountCents,
+      assumption: `${DISPATCH_ASSUMPTIONS[3]} (matched pricing rule ${matchedRule.id})`,
+      diagnostic: `matched_rule:${matchedRule.id}`
+    };
+  } catch {
+    return {
+      score: 0,
+      assumption: DISPATCH_ASSUMPTIONS[3],
+      diagnostic: "fallback:pricing_rule_read_failed"
+    };
+  }
+};
+
 const buildRankingComponents = (seed: CandidateSeed): DispatchRankingComponent[] => {
   const base = (
     signal: DispatchRankingSignal,
     value: number | string,
-    assumption: string
+    assumption: string,
+    diagnostic?: string
   ): DispatchRankingComponent => ({
     signal,
     value,
     direction: "asc",
     provisional: true,
-    assumption
+    assumption,
+    ...(diagnostic ? { diagnostic } : {})
   });
 
   return [
     base("queue", seed.queueScore, DISPATCH_ASSUMPTIONS[0]),
     base("distance", seed.distanceScore, DISPATCH_ASSUMPTIONS[1]),
     base("region", seed.regionScore, DISPATCH_ASSUMPTIONS[2]),
-    base("price", seed.priceScore, DISPATCH_ASSUMPTIONS[3])
+    base("price", seed.priceScore, seed.priceAssumption, seed.priceDiagnostic)
   ];
 };
 
@@ -474,13 +610,21 @@ const rankDispatchCandidates = async (input: {
     .innerJoin(drivers, eq(drivers.id, bonds.entityId))
     .where(and(eq(bonds.companyId, input.companyId), eq(bonds.entityType, "driver"), eq(bonds.status, "active")));
 
+  const priceMatch = await resolvePriceMatchForDelivery({
+    tx: input.tx,
+    companyId: input.companyId,
+    delivery: input.delivery
+  });
+
   const seeds: CandidateSeed[] = activeDriverBonds.map(({ bond, driver }) => ({
     bond,
     driver,
     queueScore: new Date(bond.createdAt).getTime(),
     distanceScore: normalizedTextScore(driver.name).length,
     regionScore: normalizedTextScore(`${input.delivery.pickupAddress ?? ""}|${input.delivery.dropoffAddress ?? ""}`),
-    priceScore: 0
+    priceScore: priceMatch.score,
+    priceDiagnostic: priceMatch.diagnostic,
+    priceAssumption: priceMatch.assumption
   }));
 
   const sorted = seeds.sort((left, right) => {

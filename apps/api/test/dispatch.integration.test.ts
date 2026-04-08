@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FastifyInstance } from "fastify";
 import request from "supertest";
-import { assertDb, bonds, deliveryEvents, dispatchAttempts, dispatchQueueEntries, driverStrikes, users } from "@repo/db";
+import { assertDb, bonds, deliveryEvents, dispatchAttempts, dispatchQueueEntries, driverStrikes, pricingRules, users } from "@repo/db";
 import { asc, eq } from "drizzle-orm";
 import { buildApp } from "../src/index";
 
@@ -304,5 +304,148 @@ describe.skipIf(!process.env.DATABASE_URL)("dispatch integration", () => {
       .where(eq(driverStrikes.driverId, driverProfile.id))
       .orderBy(asc(driverStrikes.createdAt));
     expect(strikeRows.map((row) => row.consequence)).toEqual(["warning", "bond_suspended", "bond_revoked"]);
+  }, 30000);
+
+  it("applies pricing rules in dispatch snapshots and exposes explicit fallback diagnostics", async () => {
+    const { db } = assertDb();
+    const suffix = Date.now() + 3;
+
+    const companyAgent = await registerAndLogin(app, {
+      role: "company",
+      name: "Company Pricing Dispatch",
+      email: `company.pricing.dispatch.${suffix}@sendro.test`,
+      companyName: "Company Pricing Dispatch"
+    });
+    const retailerAgent = await registerAndLogin(app, {
+      role: "retailer",
+      name: "Retailer Pricing Dispatch",
+      email: `retailer.pricing.dispatch.${suffix}@sendro.test`,
+      retailerName: "Retailer Pricing Dispatch"
+    });
+    const driverAgent = await registerAndLogin(app, {
+      role: "driver",
+      name: "Driver Pricing Dispatch",
+      email: `driver.pricing.dispatch.${suffix}@sendro.test`,
+      driverName: "Driver Pricing Dispatch",
+      phone: `+5571${String(suffix).slice(-8)}`
+    });
+
+    const companyProfile = trpcJson(await companyAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+    const retailerProfile = trpcJson(await retailerAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+
+    const [retailerUser] = await db
+      .select()
+      .from(users)
+      .where(eq(users.email, `retailer.pricing.dispatch.${suffix}@sendro.test`))
+      .limit(1);
+    const driverProfile = trpcJson(await driverAgent.get("/trpc/user.me").set("origin", "http://localhost:3000")).profile;
+
+    await db.insert(bonds).values([
+      {
+        companyId: companyProfile.id,
+        entityId: retailerProfile.id,
+        entityType: "retailer",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      },
+      {
+        companyId: companyProfile.id,
+        entityId: driverProfile.id,
+        entityType: "driver",
+        status: "active",
+        requestedByUserId: retailerUser!.id
+      }
+    ]);
+
+    const [ruleWide, ruleSpecific] = await db
+      .insert(pricingRules)
+      .values([
+        {
+          companyId: companyProfile.id,
+          region: "SP-CAPITAL",
+          deliveryType: "same_day",
+          weightMinGrams: 0,
+          weightMaxGrams: 2000,
+          amountCents: 1800,
+          currency: "BRL"
+        },
+        {
+          companyId: companyProfile.id,
+          region: "SP-CAPITAL",
+          deliveryType: "same_day",
+          weightMinGrams: 1000,
+          weightMaxGrams: 1500,
+          amountCents: 2300,
+          currency: "BRL"
+        }
+      ])
+      .returning();
+
+    const createWithMetadata = async (externalReference: string, metadata: Record<string, unknown>) => {
+      const createResponse = await retailerAgent
+        .post("/trpc/deliveries.create")
+        .set("origin", "http://localhost:3000")
+        .send({
+          companyId: companyProfile.id,
+          externalReference,
+          metadata
+        });
+
+      expect(createResponse.status, createResponse.text).toBe(200);
+      return trpcJson(createResponse);
+    };
+
+    const matchedBoundary = await createWithMetadata(`PRICING-EDGE-${suffix}`, {
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightGrams: 1500
+    });
+
+    const matchedPriceComponent = matchedBoundary.dispatch.latestSnapshot[0].components.find(
+      (component: { signal: string }) => component.signal === "price"
+    );
+    expect(matchedPriceComponent.value).toBe(2300);
+    expect(matchedPriceComponent.diagnostic).toBe(`matched_rule:${ruleSpecific.id}`);
+
+    const matchedAttemptPriceComponent = matchedBoundary.dispatch.attempts[0].candidateSnapshot.components.find(
+      (component: { signal: string }) => component.signal === "price"
+    );
+    expect(matchedAttemptPriceComponent.value).toBe(2300);
+    expect(matchedAttemptPriceComponent.diagnostic).toBe(`matched_rule:${ruleSpecific.id}`);
+
+    const unmatchedOutsideRange = await createWithMetadata(`PRICING-OUTSIDE-${suffix}`, {
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightGrams: 2001
+    });
+    const unmatchedPriceComponent = unmatchedOutsideRange.dispatch.latestSnapshot[0].components.find(
+      (component: { signal: string }) => component.signal === "price"
+    );
+    expect(unmatchedPriceComponent.value).toBe(0);
+    expect(unmatchedPriceComponent.diagnostic).toBe("fallback:no_pricing_rule_match");
+
+    const malformedMetadata = await createWithMetadata(`PRICING-MALFORMED-${suffix}`, {
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightGrams: "not-a-number"
+    });
+    const malformedPriceComponent = malformedMetadata.dispatch.latestSnapshot[0].components.find(
+      (component: { signal: string }) => component.signal === "price"
+    );
+    expect(malformedPriceComponent.value).toBe(0);
+    expect(malformedPriceComponent.diagnostic).toBe("fallback:delivery_metadata_unmatchable");
+
+    const fallbackAtOpenBoundary = await createWithMetadata(`PRICING-OPEN-RANGE-${suffix}`, {
+      region: "SP-CAPITAL",
+      deliveryType: "same_day",
+      weightGrams: 1000
+    });
+    const openBoundaryPriceComponent = fallbackAtOpenBoundary.dispatch.latestSnapshot[0].components.find(
+      (component: { signal: string }) => component.signal === "price"
+    );
+    expect(openBoundaryPriceComponent.value).toBe(2300);
+    expect(openBoundaryPriceComponent.diagnostic).toBe(`matched_rule:${ruleSpecific.id}`);
+
+    expect(ruleWide.id).not.toBe(ruleSpecific.id);
   }, 30000);
 });

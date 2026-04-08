@@ -91,6 +91,7 @@ export type DispatchRankingComponent = {
   direction: "asc" | "desc";
   provisional: boolean;
   assumption: string;
+  diagnostic?: string;
 };
 
 export type DispatchCandidateSnapshot = {
