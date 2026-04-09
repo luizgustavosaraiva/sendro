@@ -1,12 +1,14 @@
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { assertDb } from "@repo/db";
-import { whatsappContactMappings, whatsappSessions } from "@repo/db/schema";
+import { whatsappSessions } from "@repo/db/schema";
 import type { WhatsAppProvider } from "@repo/shared";
 import type { WhatsAppSessionStatus } from "@repo/shared";
 import { processIntakeMessage } from "./intake";
 import { processDriverMessage } from "./driver";
 import { EvolutionGoAdapter } from "./evolution-go";
 import { env } from "../../env";
+import { resolveWhatsAppContact } from "./contact-resolver";
+import { buildUnknownContactAcquisitionResponse } from "./acquisition";
 
 // ─── No-op stub for tests (env vars absent) ───────────────────────────────────
 
@@ -237,20 +239,6 @@ export async function handleMessage({
     return;
   }
 
-  // Resolve contact role from whatsapp_contact_mappings
-  const mappingRows = await db
-    .select({ role: whatsappContactMappings.role })
-    .from(whatsappContactMappings)
-    .where(
-      and(
-        eq(whatsappContactMappings.companyId, session.companyId),
-        eq(whatsappContactMappings.contactJid, from)
-      )
-    )
-    .limit(1);
-
-  const role = mappingRows.length > 0 ? mappingRows[0].role : "retailer";
-
   const adapter = getAdapter();
   const sendReply = async (text: string) => {
     try {
@@ -263,7 +251,10 @@ export async function handleMessage({
     }
   };
 
-  if (role === "driver") {
+  const resolvedContact = await resolveWhatsAppContact(db, session.companyId, from);
+  console.info(`[conversation] route_selected category=${resolvedContact.category} companyId=${session.companyId} contactJid=${from}`);
+
+  if (resolvedContact.category === "known_driver") {
     await processDriverMessage({
       instanceName,
       companyId: session.companyId,
@@ -273,8 +264,10 @@ export async function handleMessage({
       imageUrl,
       sendReply
     });
-  } else {
-    // Default: retailer intake flow
+  } else if (
+    resolvedContact.category === "known_retailer_operational" ||
+    resolvedContact.category === "known_retailer_blocked"
+  ) {
     await processIntakeMessage({
       db,
       companyId: session.companyId,
@@ -283,5 +276,8 @@ export async function handleMessage({
       messageText: body ?? "",
       sendReply
     });
+  } else {
+    const acquisition = buildUnknownContactAcquisitionResponse(body ?? "");
+    await sendReply(acquisition.reply);
   }
 }
