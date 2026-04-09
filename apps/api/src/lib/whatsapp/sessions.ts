@@ -32,7 +32,8 @@ export function getAdapter(): WhatsAppProvider {
     if (env.EVOLUTION_API_URL && env.EVOLUTION_API_KEY) {
       _adapter = new EvolutionGoAdapter({
         apiUrl: env.EVOLUTION_API_URL,
-        apiKey: env.EVOLUTION_API_KEY
+        apiKey: env.EVOLUTION_API_KEY,
+        webhookUrl: `${env.API_URL}/webhooks/whatsapp`
       });
     } else {
       _adapter = new NoOpWhatsAppAdapter();

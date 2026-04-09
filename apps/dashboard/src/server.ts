@@ -667,12 +667,15 @@ export const server = createServer(async (request, response) => {
   }
 });
 
+const dashboardHost = (process.env.HOST && process.env.HOST.trim().length > 0 ? process.env.HOST : "0.0.0.0");
+const dashboardPort = Number(process.env.PORT && process.env.PORT.trim().length > 0 ? process.env.PORT : 3000);
+
 export const startDashboard = () =>
   new Promise<void>((resolve, reject) => {
     server.once("error", reject);
-    server.listen(3000, "127.0.0.1", () => {
+    server.listen(dashboardPort, dashboardHost, () => {
       server.off("error", reject);
-      console.log("dashboard_ready:http://127.0.0.1:3000");
+      console.log(`dashboard_ready:http://${dashboardHost}:${dashboardPort}`);
       resolve();
     });
   });

@@ -16,7 +16,25 @@ services:
       timeout: 5s
       retries: 5
     labels:
-      dev.sendro.description: "Local PostgreSQL for S01 auth and Drizzle migration verification"
+      dev.sendro.description: "Local PostgreSQL for Sendro + Evolution Go verification"
+
+  evolution:
+    image: evoapicloud/evolution-go:latest
+    container_name: sendro-evolution-go
+    environment:
+      SERVER_PORT: 8080
+      CLIENT_NAME: evolution
+      GLOBAL_API_KEY: sendro-evolution-local-key
+      POSTGRES_AUTH_DB: postgresql://sendro:sendro@postgres:5432/sendro?sslmode=disable
+      POSTGRES_USERS_DB: postgresql://sendro:sendro@postgres:5432/sendro?sslmode=disable
+      DATABASE_SAVE_MESSAGES: "true"
+      WADEBUG: INFO
+      LOGTYPE: console
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
 
   api:
     build:
@@ -28,9 +46,17 @@ services:
       DASHBOARD_URL: http://dashboard:3000
       BETTER_AUTH_SECRET: 0123456789abcdef0123456789abcdef
       STRIPE_API_KEY: sk_test_sendro_local
+      EVOLUTION_API_URL: http://evolution:8080
+      EVOLUTION_API_KEY: sendro-evolution-local-key
+      LLM_BASE_URL: http://host.docker.internal:11434/v1
+      LLM_MODEL: qwen3.5:2b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       postgres:
         condition: service_healthy
+      evolution:
+        condition: service_started
     ports:
       - "3001:3001"
 

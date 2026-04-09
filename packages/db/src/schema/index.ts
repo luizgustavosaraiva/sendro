@@ -172,6 +172,24 @@ export const retailers = pgTable(
   })
 );
 
+export const retailerAddresses = pgTable(
+  "retailer_addresses",
+  {
+    id: uuid("id").defaultRandom().primaryKey(),
+    retailerId: uuid("retailer_id")
+      .notNull()
+      .references(() => retailers.id, { onDelete: "cascade" }),
+    label: varchar("label", { length: 120 }).notNull().default("principal"),
+    address: text("address").notNull(),
+    isDefault: boolean("is_default").default(false).notNull(),
+    ...timestamps
+  },
+  (table) => ({
+    retailerIdx: index("retailer_addresses_retailer_idx").on(table.retailerId),
+    retailerDefaultIdx: index("retailer_addresses_retailer_default_idx").on(table.retailerId, table.isDefault)
+  })
+);
+
 export const drivers = pgTable(
   "drivers",
   {
@@ -467,7 +485,15 @@ export const retailersRelations = relations(retailers, ({ one, many }) => ({
     fields: [retailers.userId],
     references: [users.id]
   }),
-  deliveries: many(deliveries)
+  deliveries: many(deliveries),
+  addresses: many(retailerAddresses)
+}));
+
+export const retailerAddressesRelations = relations(retailerAddresses, ({ one }) => ({
+  retailer: one(retailers, {
+    fields: [retailerAddresses.retailerId],
+    references: [retailers.id]
+  })
 }));
 
 export const driversRelations = relations(drivers, ({ one, many }) => ({
@@ -623,6 +649,7 @@ export const schema = {
   verifications,
   companies,
   retailers,
+  retailerAddresses,
   drivers,
   bonds,
   invitations,
