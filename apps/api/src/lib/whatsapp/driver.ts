@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { assertDb, whatsappContactMappings, conversationStates, drivers, bonds, deliveries, dispatchQueueEntries } from "@repo/db";
 import { resolveDriverOffer, driverUpdateDeliveryStatus, completeDelivery } from "../dispatch";
+import { appendConversationTurn, computeOperationalStaleAt, getOrCreateConversationState, updateConversationState } from "./conversation-memory";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -36,30 +37,6 @@ export const resolveDriverFromJid = async (
   if (!driver) return null;
 
   return { userId: mapping.userId, driverId: driver.id, driverName: driver.name };
-};
-
-// ─── Conversation state helpers ───────────────────────────────────────────────
-
-const getOrCreateDriverState = async (db: DbInstance, companyId: string, contactJid: string) => {
-  const [existing] = await db
-    .select()
-    .from(conversationStates)
-    .where(
-      and(
-        eq(conversationStates.companyId, companyId),
-        eq(conversationStates.contactJid, contactJid)
-      )
-    )
-    .limit(1);
-
-  if (existing) return existing;
-
-  const [created] = await db
-    .insert(conversationStates)
-    .values({ companyId, contactJid, phase: "driver_idle" })
-    .returning();
-
-  return created;
 };
 
 // ─── Command parsing ──────────────────────────────────────────────────────────
@@ -145,17 +122,30 @@ export const processDriverMessage = async (params: {
   const sessionUser = { id: userId, role: "driver" as const };
 
   // Idempotency check
-  const state = await getOrCreateDriverState(db, companyId, contactJid);
+  const state = await getOrCreateConversationState(db, companyId, contactJid);
   if (state.lastProcessedMessageId === messageId) {
     console.info(`[WhatsApp/driver] idempotency skip messageId=${messageId} driverId=${driverId}`);
     return;
   }
 
-  // Update lastProcessedMessageId immediately to prevent double-processing
-  await db
-    .update(conversationStates)
-    .set({ lastProcessedMessageId: messageId, updatedAt: new Date() })
-    .where(eq(conversationStates.id, state.id));
+  await updateConversationState(db, state.id, {
+    roleResolution: "driver",
+    conversationMode: "driver_idle",
+    currentFlow: "operational",
+    status: "active",
+    staleAt: computeOperationalStaleAt(),
+    lastUserMessageAt: new Date(),
+    lastProcessedMessageId: messageId
+  });
+  await appendConversationTurn(db, {
+    conversationStateId: state.id,
+    companyId,
+    contactJid,
+    role: "user",
+    messageText,
+    normalizedText: normalizeText(messageText),
+    metadata: imageUrl ? { imageUrl } : {}
+  });
 
   // Handle photo proof
   if (imageUrl) {
@@ -172,7 +162,16 @@ export const processDriverMessage = async (params: {
       .limit(1);
 
     if (!delivery) {
-      await sendReply("Nenhuma entrega ativa encontrada para envio de comprovante.");
+      const reply = "Nenhuma entrega ativa encontrada para envio de comprovante.";
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        detectedIntent: "unknown"
+      });
+      await sendReply(reply);
       return;
     }
 
@@ -181,11 +180,29 @@ export const processDriverMessage = async (params: {
         user: sessionUser,
         data: { deliveryId: delivery.id, proof: { photoUrl: imageUrl } }
       });
-      await sendReply("✅ Entrega concluída com comprovante! Obrigado.");
+      const reply = "✅ Entrega concluída com comprovante! Obrigado.";
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        detectedIntent: "status_question"
+      });
+      await sendReply(reply);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[WhatsApp/driver] completeDelivery error driverId=${driverId}`, err);
-      await sendReply(`Erro ao concluir entrega: ${msg}`);
+      const reply = `Erro ao concluir entrega: ${msg}`;
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        metadata: { error: msg }
+      });
+      await sendReply(reply);
     }
     return;
   }
@@ -195,7 +212,16 @@ export const processDriverMessage = async (params: {
   if (command.type === "accept" || command.type === "refuse") {
     const queueEntry = await loadActiveOfferForDriver(db, companyId, driverId);
     if (!queueEntry) {
-      await sendReply("Nenhuma oferta pendente encontrada.");
+      const reply = "Nenhuma oferta pendente encontrada.";
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        detectedIntent: "unknown"
+      });
+      await sendReply(reply);
       return;
     }
 
@@ -209,14 +235,41 @@ export const processDriverMessage = async (params: {
       });
 
       if (command.type === "accept") {
-        await sendReply(`✅ Entrega aceita! Use 'coletado' quando buscar o pacote e envie uma foto ao entregar.`);
+        const reply = `✅ Entrega aceita! Use 'coletado' quando buscar o pacote e envie uma foto ao entregar.`;
+        await appendConversationTurn(db, {
+          conversationStateId: state.id,
+          companyId,
+          contactJid,
+          role: "assistant",
+          messageText: reply,
+          detectedIntent: "continue_draft"
+        });
+        await sendReply(reply);
       } else {
-        await sendReply(`❌ Entrega recusada.`);
+        const reply = `❌ Entrega recusada.`;
+        await appendConversationTurn(db, {
+          conversationStateId: state.id,
+          companyId,
+          contactJid,
+          role: "assistant",
+          messageText: reply,
+          detectedIntent: "cancel_draft"
+        });
+        await sendReply(reply);
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[WhatsApp/driver] resolveDriverOffer error driverId=${driverId}`, err);
-      await sendReply(`Erro ao processar resposta: ${msg}`);
+      const reply = `Erro ao processar resposta: ${msg}`;
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        metadata: { error: msg }
+      });
+      await sendReply(reply);
     }
     return;
   }
@@ -236,11 +289,19 @@ export const processDriverMessage = async (params: {
       .limit(1);
 
     if (!delivery) {
-      await sendReply(
+      const reply =
         command.type === "picked_up"
           ? "Nenhuma entrega aceita encontrada para marcar como coletada."
-          : "Nenhuma entrega coletada encontrada para marcar em trânsito."
-      );
+          : "Nenhuma entrega coletada encontrada para marcar em trânsito.";
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        detectedIntent: "unknown"
+      });
+      await sendReply(reply);
       return;
     }
 
@@ -251,17 +312,43 @@ export const processDriverMessage = async (params: {
       });
 
       const label = command.type === "picked_up" ? "📦 Pacote coletado!" : "🚗 Em trânsito!";
-      await sendReply(`${label} Envie uma foto quando entregar ao destinatário.`);
+      const reply = `${label} Envie uma foto quando entregar ao destinatário.`;
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        detectedIntent: "status_question"
+      });
+      await sendReply(reply);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[WhatsApp/driver] driverUpdateDeliveryStatus error driverId=${driverId}`, err);
-      await sendReply(`Erro ao atualizar status: ${msg}`);
+      const reply = `Erro ao atualizar status: ${msg}`;
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: reply,
+        metadata: { error: msg }
+      });
+      await sendReply(reply);
     }
     return;
   }
 
   // Unknown command
-  await sendReply(
-    "Comandos disponíveis:\n• 'aceitar' — aceitar entrega\n• 'recusar' — recusar entrega\n• 'coletado' — pacote coletado\n• 'em entrega' — saindo para entregar\n• [foto] — comprovante de entrega"
-  );
+  const reply =
+    "Comandos disponíveis:\n• 'aceitar' — aceitar entrega\n• 'recusar' — recusar entrega\n• 'coletado' — pacote coletado\n• 'em entrega' — saindo para entregar\n• [foto] — comprovante de entrega";
+  await appendConversationTurn(db, {
+    conversationStateId: state.id,
+    companyId,
+    contactJid,
+    role: "assistant",
+    messageText: reply,
+    detectedIntent: "unknown"
+  });
+  await sendReply(reply);
 };
