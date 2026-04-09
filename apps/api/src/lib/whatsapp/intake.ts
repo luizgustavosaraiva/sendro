@@ -1,8 +1,19 @@
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { assertDb, conversationStates, users, whatsappContactMappings } from "@repo/db";
+import { assertDb, users, whatsappContactMappings } from "@repo/db";
 import { createDelivery } from "../dispatch";
 import { env } from "../../env";
+import {
+  appendConversationTurn,
+  computeOperationalStaleAt,
+  getOrCreateConversationState,
+  listRecentConversationTurns,
+  markConversationStaleIfNeeded,
+  updateConversationState
+} from "./conversation-memory";
+import { getConversationInterpreter, setConversationInterpreter, resetConversationInterpreter } from "./conversation-interpreter";
+import { resolveWhatsAppContact } from "./contact-resolver";
+import { buildBlockedRetailerMessage, decideRetailerConversationAction } from "./conversation-engine";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -173,6 +184,8 @@ export function setLLMExtractor(extractor: LLMExtractor): void {
   _llmExtractor = extractor;
 }
 
+export { setConversationInterpreter, resetConversationInterpreter } from "./conversation-interpreter";
+
 // ─── Retailer resolution ──────────────────────────────────────────────────────
 
 export async function resolveRetailerFromJid(
@@ -196,56 +209,7 @@ export async function resolveRetailerFromJid(
   return { userId: rows[0].userId, role: "retailer" };
 }
 
-// ─── Conversation state helpers ───────────────────────────────────────────────
-
-type ConversationStateRow = typeof conversationStates.$inferSelect;
-
-export async function getOrCreateConversationState(
-  db: DrizzleDB,
-  companyId: string,
-  contactJid: string
-): Promise<ConversationStateRow> {
-  const existing = await db
-    .select()
-    .from(conversationStates)
-    .where(
-      and(
-        eq(conversationStates.companyId, companyId),
-        eq(conversationStates.contactJid, contactJid)
-      )
-    )
-    .limit(1);
-
-  if (existing.length > 0) return existing[0];
-
-  const [created] = await db
-    .insert(conversationStates)
-    .values({ companyId, contactJid, phase: "idle" })
-    .returning();
-
-  return created;
-}
-
-export async function updateConversationState(
-  db: DrizzleDB,
-  id: string,
-  patch: {
-    phase?: string;
-    collectedFields?: Partial<DeliveryFields>;
-    lastProcessedMessageId?: string | null;
-  }
-): Promise<void> {
-  const updates: Record<string, unknown> = { updatedAt: new Date() };
-  if (patch.phase !== undefined) updates.phase = patch.phase;
-  if (patch.collectedFields !== undefined) updates.collectedFields = patch.collectedFields;
-  if (patch.lastProcessedMessageId !== undefined)
-    updates.lastProcessedMessageId = patch.lastProcessedMessageId;
-
-  await db
-    .update(conversationStates)
-    .set(updates)
-    .where(eq(conversationStates.id, id));
-}
+export { getOrCreateConversationState, updateConversationState } from "./conversation-memory";
 
 // ─── Field validation ─────────────────────────────────────────────────────────
 
@@ -275,7 +239,8 @@ export async function processIntakeMessage(params: {
   const { db, companyId, contactJid, messageId, messageText, sendReply } = params;
 
   // Load conversation state
-  const state = await getOrCreateConversationState(db, companyId, contactJid);
+  const createdState = await getOrCreateConversationState(db, companyId, contactJid);
+  const state = (await markConversationStaleIfNeeded(db, createdState.id)) ?? createdState;
 
   // Idempotency: skip if already processed
   if (state.lastProcessedMessageId === messageId) {
@@ -283,88 +248,253 @@ export async function processIntakeMessage(params: {
     return;
   }
 
-  // Resolve retailer identity
-  const retailer = await resolveRetailerFromJid(db, companyId, contactJid);
-  if (!retailer) {
+  const resolved = await resolveWhatsAppContact(db, companyId, contactJid);
+  if (resolved.category === "unknown_contact" || resolved.category === "known_driver") {
     await sendReply("Número não autorizado. Contate o suporte.");
     await updateConversationState(db, state.id, { lastProcessedMessageId: messageId });
     return;
   }
 
+  if (resolved.category === "known_retailer_blocked") {
+    await updateConversationState(db, state.id, {
+      status: "blocked",
+      blockedReason: resolved.blockedReason,
+      contextSnapshot: resolved.contextSnapshot,
+      lastProcessedMessageId: messageId
+    });
+    await sendReply(buildBlockedRetailerMessage(resolved.blockedReason));
+    return;
+  }
+
+  const retailer = { userId: resolved.userId, role: "retailer" as const };
+
   const existingFields = (state.collectedFields ?? {}) as Partial<DeliveryFields>;
+  const conversationStatus = (state.status ?? "active") as "active" | "stale" | "completed" | "cancelled" | "blocked";
+  const recentTurns = await listRecentConversationTurns(db, state.id, 6);
 
-  if (state.phase === "idle" || state.phase === "collecting") {
-    // Extract fields via LLM
-    const extractor = getLLMExtractor();
-    const { fields: extracted, nextMessage } = await extractor.extract(
-      [messageText],
-      existingFields
-    );
+  await appendConversationTurn(db, {
+    conversationStateId: state.id,
+    companyId,
+    contactJid,
+    role: "user",
+    messageText,
+    normalizedText: messageText.trim().toLowerCase(),
+    metadata: { phase: state.phase, recentTurnCount: recentTurns.length }
+  });
 
-    const mergedFields: Partial<DeliveryFields> = { ...existingFields, ...extracted };
+  const interpreter = getConversationInterpreter(getLLMExtractor);
+  const interpretation = await interpreter.interpret({
+    messageText,
+    existingFields
+  });
 
-    if (hasRequiredFields(mergedFields)) {
-      // All required fields present → move to confirming
+  const decision = decideRetailerConversationAction({
+    phase: state.phase,
+    status: conversationStatus,
+    existingFields,
+    interpretation,
+    messageText
+  });
+
+  if (decision.kind === "restart_draft") {
       await updateConversationState(db, state.id, {
-        phase: "confirming",
-        collectedFields: mergedFields,
+        phase: decision.phase,
+        collectedFields: decision.fields,
+        status: "active",
+        staleAt: computeOperationalStaleAt(),
+        lastUserMessageAt: new Date(),
         lastProcessedMessageId: messageId
       });
-      await sendReply(buildSummaryMessage(mergedFields));
-    } else {
-      // Still collecting
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: decision.reply,
+        detectedIntent: "restart_draft"
+      });
+      await sendReply(decision.reply);
+      return;
+  }
+
+  if (decision.kind === "stale_prompt") {
+    await updateConversationState(db, state.id, {
+      status: "stale",
+      lastUserMessageAt: new Date(),
+      lastProcessedMessageId: messageId
+    });
+    await appendConversationTurn(db, {
+      conversationStateId: state.id,
+      companyId,
+      contactJid,
+      role: "assistant",
+      messageText: decision.reply,
+      detectedIntent: "continue_draft",
+      metadata: { sourceEvent: "stale_resume_prompt" }
+    });
+    await sendReply(decision.reply);
+    return;
+  }
+
+  if (decision.kind === "clarify") {
       await updateConversationState(db, state.id, {
-        phase: "collecting",
-        collectedFields: mergedFields,
+        phase: decision.phase,
+        collectedFields: decision.fields,
+        status: "active",
+        staleAt: computeOperationalStaleAt(),
+        lastUserMessageAt: new Date(),
         lastProcessedMessageId: messageId
       });
-      await sendReply(nextMessage);
-    }
-  } else if (state.phase === "confirming") {
-    const text = messageText.trim();
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: decision.reply,
+        detectedIntent: "unknown"
+      });
+      await sendReply(decision.reply);
+      return;
+  }
 
-    if (/^(s[ií]m?|confirm)/i.test(text)) {
-      // Create delivery
-      const fields = existingFields as Required<Pick<DeliveryFields, "pickupAddress" | "dropoffAddress">> & Partial<DeliveryFields>;
+  if (decision.kind === "collect_more") {
+      await updateConversationState(db, state.id, {
+        phase: decision.phase,
+        collectedFields: decision.fields,
+        status: "active",
+        staleAt: computeOperationalStaleAt(),
+        lastUserMessageAt: new Date(),
+        lastProcessedMessageId: messageId
+      });
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: decision.reply,
+        detectedIntent: "update_draft"
+      });
+      await sendReply(decision.reply);
+      return;
+  }
+
+  if (decision.kind === "request_confirmation") {
+      await updateConversationState(db, state.id, {
+        phase: decision.phase,
+        collectedFields: decision.fields,
+        status: "active",
+        staleAt: computeOperationalStaleAt(),
+        lastUserMessageAt: new Date(),
+        lastProcessedMessageId: messageId
+      });
+      const summary = buildSummaryMessage(decision.fields);
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: summary,
+        detectedIntent: "confirm_draft"
+      });
+      await sendReply(summary);
+      return;
+  }
+
+  if (decision.kind === "cancel_draft") {
+      await updateConversationState(db, state.id, {
+        phase: "idle",
+        collectedFields: {},
+        status: "cancelled",
+        closedAt: new Date(),
+        lastBotMessageAt: new Date(),
+        lastProcessedMessageId: messageId
+      });
+      await appendConversationTurn(db, {
+        conversationStateId: state.id,
+        companyId,
+        contactJid,
+        role: "assistant",
+        messageText: decision.reply,
+        detectedIntent: "cancel_draft"
+      });
+      await sendReply(decision.reply);
+      return;
+  }
+
+  if (decision.kind === "confirm_draft") {
       try {
         const delivery = await createDelivery({
           user: { id: retailer.userId, role: "retailer" },
           data: {
             companyId,
-            pickupAddress: fields.pickupAddress,
-            dropoffAddress: fields.dropoffAddress,
-            externalReference: fields.externalReference ?? null
+            pickupAddress: decision.fields.pickupAddress,
+            dropoffAddress: decision.fields.dropoffAddress,
+            externalReference: decision.fields.externalReference ?? null
           }
         });
         await updateConversationState(db, state.id, {
           phase: "idle",
           collectedFields: {},
+          status: "completed",
+          closedAt: new Date(),
+          lastBotMessageAt: new Date(),
           lastProcessedMessageId: messageId
         });
-        await sendReply(`✅ Entrega criada com sucesso! ID: ${delivery.deliveryId}`);
+        const reply = `✅ Entrega criada com sucesso! ID: ${delivery.deliveryId}`;
+        await appendConversationTurn(db, {
+          conversationStateId: state.id,
+          companyId,
+          contactJid,
+          role: "assistant",
+          messageText: reply,
+          detectedIntent: "confirm_draft",
+          metadata: { deliveryId: delivery.deliveryId }
+        });
+        await sendReply(reply);
       } catch (err) {
         console.error(`[intake] createDelivery error companyId=${companyId}`, err);
-        await updateConversationState(db, state.id, { lastProcessedMessageId: messageId });
-        await sendReply("Erro ao criar entrega. Por favor, tente novamente.");
+        const reply = "Erro ao criar entrega. Por favor, tente novamente.";
+        await updateConversationState(db, state.id, {
+          lastProcessedMessageId: messageId,
+          lastBotMessageAt: new Date()
+        });
+        await appendConversationTurn(db, {
+          conversationStateId: state.id,
+          companyId,
+          contactJid,
+          role: "assistant",
+          messageText: reply,
+          detectedIntent: "confirm_draft",
+          metadata: { error: err instanceof Error ? err.message : String(err) }
+        });
+        await sendReply(reply);
       }
-    } else if (/^(n[aã]o?|cancel)/i.test(text)) {
-      await updateConversationState(db, state.id, {
-        phase: "idle",
-        collectedFields: {},
-        lastProcessedMessageId: messageId
-      });
-      await sendReply("Pedido cancelado.");
-    } else {
-      // Resend summary
-      await updateConversationState(db, state.id, { lastProcessedMessageId: messageId });
-      await sendReply(buildSummaryMessage(existingFields));
-    }
-  } else {
-    // Unknown phase — reset
+      return;
+  }
+
+  if (decision.kind === "blocked") {
+    await updateConversationState(db, state.id, {
+      status: "blocked",
+      lastBotMessageAt: new Date(),
+      lastProcessedMessageId: messageId
+    });
+    await appendConversationTurn(db, {
+      conversationStateId: state.id,
+      companyId,
+      contactJid,
+      role: "assistant",
+      messageText: decision.reply,
+      detectedIntent: "unknown"
+    });
+    await sendReply(decision.reply);
+    return;
+  }
+
+  // Unknown phase — reset
     await updateConversationState(db, state.id, {
       phase: "idle",
       collectedFields: {},
+      status: "active",
       lastProcessedMessageId: messageId
     });
-  }
 }

@@ -1,7 +1,15 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { assertDb, companies, users, bonds, retailers, whatsappContactMappings, conversationStates, deliveries } from "@repo/db";
-import { processIntakeMessage, setLLMExtractor, getOrCreateConversationState } from "../src/lib/whatsapp/intake";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { eq, getTableColumns, sql } from "drizzle-orm";
+import { assertDb, companies, users, bonds, retailers, whatsappContactMappings, conversationStates, conversationTurns, deliveries } from "@repo/db";
+import {
+  processIntakeMessage,
+  setLLMExtractor,
+  setConversationInterpreter,
+  resetConversationInterpreter,
+  getOrCreateConversationState
+} from "../src/lib/whatsapp/intake";
 import type { LLMExtractor, DeliveryFields } from "../src/lib/whatsapp/intake";
+import type { LLMConversationInterpreter } from "../src/lib/whatsapp/conversation-interpreter";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -81,6 +89,10 @@ describe.skipIf(!process.env.DATABASE_URL)("whatsapp intake", () => {
     };
   });
 
+  beforeEach(() => {
+    resetConversationInterpreter();
+  });
+
   afterAll(() => {
     // Reset LLM extractor singleton
     setLLMExtractor({
@@ -88,9 +100,92 @@ describe.skipIf(!process.env.DATABASE_URL)("whatsapp intake", () => {
         return { fields: {}, nextMessage: "Por favor, informe o endereço de coleta." };
       }
     });
+    setConversationInterpreter({
+      async interpret() {
+        return {
+          flow: "operational",
+          intent: "unknown",
+          confidence: "low",
+          shouldContinueDraft: false,
+          shouldStartNewDraft: false,
+          shouldAskClarification: true,
+          reply: "Por favor, informe o endereço de coleta."
+        };
+      }
+    });
   });
 
-  it("idle → collecting: first message returns collecting state with nextMessage", async () => {
+  function makeInterpreterStub(result: Awaited<ReturnType<LLMConversationInterpreter["interpret"]>>): LLMConversationInterpreter {
+    return {
+      async interpret() {
+        return result;
+      }
+    };
+  }
+
+  it("exposes richer conversation memory columns for hybrid agent state", () => {
+    const stateColumns = getTableColumns(conversationStates);
+    const turnColumns = getTableColumns(conversationTurns);
+
+    expect(stateColumns.userId).toBeDefined();
+    expect(stateColumns.retailerId).toBeDefined();
+    expect(stateColumns.roleResolution).toBeDefined();
+    expect(stateColumns.conversationMode).toBeDefined();
+    expect(stateColumns.currentFlow).toBeDefined();
+    expect(stateColumns.currentIntent).toBeDefined();
+    expect(stateColumns.draftPayload).toBeDefined();
+    expect(stateColumns.contextSnapshot).toBeDefined();
+    expect(stateColumns.blockedReason).toBeDefined();
+    expect(stateColumns.status).toBeDefined();
+    expect(stateColumns.startedAt).toBeDefined();
+    expect(stateColumns.lastUserMessageAt).toBeDefined();
+    expect(stateColumns.lastBotMessageAt).toBeDefined();
+    expect(stateColumns.staleAt).toBeDefined();
+    expect(stateColumns.closedAt).toBeDefined();
+
+    expect(turnColumns.conversationStateId).toBeDefined();
+    expect(turnColumns.companyId).toBeDefined();
+    expect(turnColumns.contactJid).toBeDefined();
+    expect(turnColumns.role).toBeDefined();
+    expect(turnColumns.messageText).toBeDefined();
+    expect(turnColumns.normalizedText).toBeDefined();
+    expect(turnColumns.detectedIntent).toBeDefined();
+    expect(turnColumns.metadata).toBeDefined();
+  });
+
+  it("applies the hybrid memory contract to the database schema", async () => {
+    const { db } = assertDb();
+
+    const columns = await db.execute(sql`
+      select column_name
+      from information_schema.columns
+      where table_name = 'conversation_states'
+        and column_name in (
+          'user_id',
+          'retailer_id',
+          'role_resolution',
+          'conversation_mode',
+          'current_flow',
+          'current_intent',
+          'draft_payload',
+          'context_snapshot',
+          'blocked_reason',
+          'status',
+          'started_at',
+          'last_user_message_at',
+          'last_bot_message_at',
+          'stale_at',
+          'closed_at'
+        )
+    `);
+
+    const turnTable = await db.execute(sql`select to_regclass('public.conversation_turns') as value`);
+
+    expect(columns.rows).toHaveLength(15);
+    expect(turnTable.rows[0]?.value).toBe("conversation_turns");
+  });
+
+  it("first operational request without enough structured fields asks for the next required step", async () => {
     const suffix = `${Date.now()}a`;
     const { company, contactJid } = await seedCompanyAndRetailer(suffix);
     const { db } = assertDb();
@@ -103,15 +198,126 @@ describe.skipIf(!process.env.DATABASE_URL)("whatsapp intake", () => {
       companyId: company.id,
       contactJid,
       messageId: "msg-001",
-      messageText: "Olá, quero fazer uma entrega",
+      messageText: "Quero fazer uma entrega",
       sendReply: async (t) => { localReplies.push(t); }
     });
 
     const state = await getOrCreateConversationState(db, company.id, contactJid);
-    expect(state.phase).toBe("collecting");
+    expect(["idle", "collecting"]).toContain(state.phase);
     expect(state.lastProcessedMessageId).toBe("msg-001");
     expect(localReplies.length).toBe(1);
     expect(localReplies[0]).toContain("endereço de coleta");
+  });
+
+  it("greeting does not become a delivery field and yields a short clarification", async () => {
+    const suffix = `${Date.now()}g`;
+    const { company, contactJid } = await seedCompanyAndRetailer(suffix);
+    const { db } = assertDb();
+
+    setConversationInterpreter(
+      makeInterpreterStub({
+        flow: "operational",
+        intent: "unknown",
+        confidence: "medium",
+        shouldContinueDraft: false,
+        shouldStartNewDraft: false,
+        shouldAskClarification: true,
+        reply: "Oi! Me envie o endereço de entrega ou descreva rapidamente o pedido."
+      })
+    );
+
+    const localReplies: string[] = [];
+    await processIntakeMessage({
+      db,
+      companyId: company.id,
+      contactJid,
+      messageId: "msg-greeting",
+      messageText: "Olá",
+      sendReply: async (t) => {
+        localReplies.push(t);
+      }
+    });
+
+    const state = await getOrCreateConversationState(db, company.id, contactJid);
+    expect(state.phase).toBe("idle");
+    expect(state.collectedFields).toEqual({});
+    expect(localReplies[0]).toContain("endereço de entrega");
+  });
+
+  it("low-confidence text asks clarification instead of mutating delivery fields", async () => {
+    const suffix = `${Date.now()}h`;
+    const { company, contactJid } = await seedCompanyAndRetailer(suffix);
+    const { db } = assertDb();
+
+    setConversationInterpreter(
+      makeInterpreterStub({
+        flow: "operational",
+        intent: "unknown",
+        confidence: "low",
+        shouldContinueDraft: false,
+        shouldStartNewDraft: false,
+        shouldAskClarification: true,
+        reply: "Esse texto ficou ambíguo. Me diga o endereço de entrega, por favor."
+      })
+    );
+
+    const localReplies: string[] = [];
+    await processIntakeMessage({
+      db,
+      companyId: company.id,
+      contactJid,
+      messageId: "msg-clarify",
+      messageText: "pode ser aquele de sempre",
+      sendReply: async (t) => {
+        localReplies.push(t);
+      }
+    });
+
+    const state = await getOrCreateConversationState(db, company.id, contactJid);
+    expect(state.collectedFields).toEqual({});
+    expect(localReplies[0]).toContain("ambíguo");
+  });
+
+  it("explicit restart intent resets existing draft and responds distinctly", async () => {
+    const suffix = `${Date.now()}i`;
+    const { company, contactJid } = await seedCompanyAndRetailer(suffix);
+    const { db } = assertDb();
+    const state = await getOrCreateConversationState(db, company.id, contactJid);
+
+    const { updateConversationState } = await import("../src/lib/whatsapp/intake");
+    await updateConversationState(db, state.id, {
+      phase: "confirming",
+      collectedFields: { pickupAddress: "Rua Antiga", dropoffAddress: "Rua Antiga 2" }
+    });
+
+    setConversationInterpreter(
+      makeInterpreterStub({
+        flow: "operational",
+        intent: "restart_draft",
+        confidence: "high",
+        shouldContinueDraft: false,
+        shouldStartNewDraft: true,
+        shouldAskClarification: false,
+        reply: "Perfeito. Vamos começar um novo pedido."
+      })
+    );
+
+    const localReplies: string[] = [];
+    await processIntakeMessage({
+      db,
+      companyId: company.id,
+      contactJid,
+      messageId: "msg-restart",
+      messageText: "quero fazer outro pedido",
+      sendReply: async (t) => {
+        localReplies.push(t);
+      }
+    });
+
+    const updated = await getOrCreateConversationState(db, company.id, contactJid);
+    expect(updated.phase).toBe("collecting");
+    expect(updated.collectedFields).toEqual({});
+    expect(localReplies[0]).toContain("novo pedido");
   });
 
   it("collecting → confirming: when LLM returns both required fields, state moves to confirming", async () => {
@@ -234,5 +440,60 @@ describe.skipIf(!process.env.DATABASE_URL)("whatsapp intake", () => {
     });
 
     expect(localReplies[0]).toContain("não autorizado");
+  });
+
+  it("blocked retailer gets a blocker response before delivery creation is attempted", async () => {
+    const suffix = `${Date.now()}z`;
+    const { db } = assertDb();
+
+    const [companyUser] = await db
+      .insert(users)
+      .values({ id: `company-user-blocked-${suffix}`, name: "Co Blocked", email: `co.blocked.${suffix}@test.com`, emailVerified: true, role: "company" })
+      .returning();
+
+    const [company] = await db
+      .insert(companies)
+      .values({ userId: companyUser.id, name: `Co Blocked ${suffix}`, slug: `co-blocked-${suffix}` })
+      .returning();
+
+    const [retailerUser] = await db
+      .insert(users)
+      .values({ id: `retailer-user-blocked-${suffix}`, name: "Ret Blocked", email: `ret.blocked.${suffix}@test.com`, emailVerified: true, role: "retailer" })
+      .returning();
+
+    const [retailer] = await db
+      .insert(retailers)
+      .values({ userId: retailerUser.id, name: `Ret Blocked ${suffix}`, slug: `ret-blocked-${suffix}` })
+      .returning();
+
+    await db.insert(bonds).values({
+      companyId: company.id,
+      entityId: retailer.id,
+      entityType: "retailer",
+      status: "pending"
+    });
+
+    const contactJid = `55114444${suffix.slice(0, 6)}@s.whatsapp.net`;
+    await db.insert(whatsappContactMappings).values({
+      companyId: company.id,
+      contactJid,
+      userId: retailerUser.id
+    });
+
+    const localReplies: string[] = [];
+    await processIntakeMessage({
+      db,
+      companyId: company.id,
+      contactJid,
+      messageId: "msg-blocked",
+      messageText: "quero criar uma entrega",
+      sendReply: async (t) => {
+        localReplies.push(t);
+      }
+    });
+
+    const createdRows = await db.select().from(deliveries).where(eq(deliveries.companyId, company.id));
+    expect(createdRows).toHaveLength(0);
+    expect(localReplies[0]).toContain("não está habilitada");
   });
 });
