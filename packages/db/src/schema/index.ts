@@ -1,5 +1,5 @@
 import { relations, sql } from "drizzle-orm";
-export { whatsappSessions, conversationStates, whatsappContactMappings } from "./whatsapp";
+export { whatsappSessions, conversationStates, conversationTurns, whatsappContactMappings } from "./whatsapp";
 import {
   boolean,
   index,
@@ -596,7 +596,7 @@ export const pricingRulesRelations = relations(pricingRules, ({ one }) => ({
   })
 }));
 
-import { whatsappSessions, conversationStates, whatsappContactMappings } from "./whatsapp";
+import { whatsappSessions, conversationStates, conversationTurns, whatsappContactMappings } from "./whatsapp";
 
 export const schema = {
   user: users,
@@ -634,6 +634,7 @@ export const schema = {
   pricingRules,
   whatsappSessions,
   conversationStates,
+  conversationTurns,
   whatsappContactMappings
 };
 
