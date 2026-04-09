@@ -194,18 +194,7 @@ let _conversationInterpreter: LLMConversationInterpreter | null = null;
 
 export function getConversationInterpreter(extractorFactory: () => LLMExtractor): LLMConversationInterpreter {
   if (!_conversationInterpreter) {
-    const hasKey = Boolean(env.OPENAI_API_KEY);
-    const hasLocalEndpoint = Boolean(env.LLM_BASE_URL);
-
-    if (hasKey || hasLocalEndpoint) {
-      _conversationInterpreter = new OpenAICompatConversationInterpreter({
-        apiKey: env.OPENAI_API_KEY ?? "ollama",
-        baseURL: env.LLM_BASE_URL,
-        model: env.LLM_MODEL
-      });
-    } else {
-      _conversationInterpreter = new ExtractorBackedConversationInterpreter(extractorFactory);
-    }
+    _conversationInterpreter = new ExtractorBackedConversationInterpreter(extractorFactory);
   }
 
   return _conversationInterpreter;

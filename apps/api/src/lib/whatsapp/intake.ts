@@ -336,12 +336,10 @@ export async function processIntakeMessage(params: {
 
   const interpretationWithDefaults = {
     ...interpretation,
-    slotUpdates: {
-      ...(defaultPickupAddress && !existingFields.pickupAddress && !interpretation.slotUpdates?.pickupAddress
-        ? { pickupAddress: defaultPickupAddress }
-        : {}),
-      ...(interpretation.slotUpdates ?? {})
-    }
+    slotUpdates:
+      defaultPickupAddress && !existingFields.pickupAddress && !interpretation.slotUpdates?.pickupAddress
+        ? { pickupAddress: defaultPickupAddress, ...(interpretation.slotUpdates ?? {}) }
+        : interpretation.slotUpdates
   };
 
   const decision = decideRetailerConversationAction({
